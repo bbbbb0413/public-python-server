@@ -1,0 +1,9 @@
+from typing import Protocol
+
+
+class ILlmCachePort(Protocol):
+    async def get(self, key: str) -> str | None: ...
+
+    async def set_with_ttl(self, key: str, value: str, ttl_seconds: int) -> None: ...
+
+    async def invalidate(self, key: str) -> None: ...
