@@ -111,6 +111,9 @@ class AskRequestedConsumer:
         )
 
         if complexity == "complex":
+            async def on_progress(data: dict[str, Any]) -> None:
+                await self._publisher.publish_progress(message.job_id, data)
+
             stream = composition.agentic_ask_use_case.execute(
                 AgenticAskCommand(
                     question=message.question,
@@ -120,6 +123,7 @@ class AskRequestedConsumer:
                     user_id=message.user_id,
                     conversation_history=message.conversation_history,
                     use_hyde=use_hyde,
+                    on_progress=on_progress,
                 )
             )
         else:

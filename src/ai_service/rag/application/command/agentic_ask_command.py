@@ -1,6 +1,10 @@
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Any
 
 from ai_service.rag.domain.vo.iteration_budget import IterationBudget
+
+ProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 
 
 @dataclass(frozen=True)
@@ -13,3 +17,5 @@ class AgenticAskCommand:
     user_id: str | None = None
     conversation_history: list[dict[str, str]] | None = None
     use_hyde: bool = False
+    on_progress: ProgressCallback | None = None
+
