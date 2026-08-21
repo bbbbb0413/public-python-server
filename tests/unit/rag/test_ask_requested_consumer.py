@@ -227,3 +227,55 @@ async def test_ask_requested_consumer_agentic_flow_stops_when_cancelled() -> Non
     assert len(done_events) == 1
     assert len(session_repo.updated_sessions) == 0
 
+
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_dynamic_cancellation_during_streaming() -> None:
+    class DynamicCancellingAskUseCase:
+        def __init__(
+            self,
+            redis_client: FakeRedis,
+            cancel_at_token: int,
+            total_tokens: int,
+        ) -> None:
+            self._redis = redis_client
+            self._cancel_at_token = cancel_at_token
+            self._total_tokens = total_tokens
+
+        async def execute(self, command: AskCommand) -> AsyncIterator[str]:
+            for i in range(self._total_tokens):
+                if i == self._cancel_at_token:
+                    await self._redis.hset("job:job-dynamic-cancel", "status", "cancelled")
+                yield f"tok_{i}"
+
+    fake_redis = FakeRedis()
+    composition, session_repo = create_fake_composition([])
+    composition.ask_use_case = DynamicCancellingAskUseCase(
+        redis_client=fake_redis,
+        cancel_at_token=12,
+        total_tokens=30,
+    )
+
+    consumer = AskRequestedConsumer(
+        brokers="localhost:9092",
+        redis_client=fake_redis,  # type: ignore[arg-type]
+        composition=composition,
+    )
+
+    message = AskRequestedMessage(
+        job_id="job-dynamic-cancel",
+        user_id="user-1",
+        question="동적 취소 테스트",
+    )
+
+    await consumer._process(message)
+
+    token_events = [e for e in fake_redis.stream_events if e.get("type") == "token"]
+    done_events = [e for e in fake_redis.stream_events if e.get("type") == "done"]
+
+    # cancel check interval이 10이므로, 12번째 취소 시 20번째 토큰 체크 시점에서 중단 (19개 토큰)
+    assert len(token_events) == 19
+    assert len(done_events) == 1
+    assert len(session_repo.updated_sessions) == 0
+
+
+
