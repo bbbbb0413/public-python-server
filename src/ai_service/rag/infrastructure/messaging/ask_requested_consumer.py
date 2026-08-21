@@ -21,6 +21,7 @@ CONSUMER_GROUP_ID = "ai-service-rag"
 _SOURCES_PREFIX = "__SOURCES:"
 _DEFAULT_ASK_TOP_K = 15
 _DEFAULT_AGENTIC_TOP_K = 5
+_CANCEL_CHECK_INTERVAL = 10
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,7 @@ class AskRequestedMessage:
 class AskRequestedConsumer:
     def __init__(self, brokers: str, redis_client: Redis, composition: RagComposition) -> None:
         self._brokers = brokers
+        self._redis = redis_client
         self._publisher = JobEventPublisher(redis_client)
         self._composition = composition
         self._consumer: AIOKafkaConsumer | None = None
@@ -135,21 +137,49 @@ class AskRequestedConsumer:
             )
 
         collected: list[str] = []
+        token_count = 0
+        is_cancelled = False
         async for chunk in stream:
             if chunk.startswith(_SOURCES_PREFIX):
                 sources = json.loads(chunk[len(_SOURCES_PREFIX) :])
                 await self._publisher.publish_sources(message.job_id, sources)
             else:
+                token_count += 1
+                if token_count % _CANCEL_CHECK_INTERVAL == 0:
+                    if await self._is_cancelled(message.job_id):
+                        logger.info("작업 취소 감지: jobId=%s", message.job_id)
+                        is_cancelled = True
+                        break
                 safe = composition.secret_pii_scanner.mask(chunk)
                 collected.append(safe)
                 await self._publisher.publish_token(message.job_id, safe)
 
-        if session is not None and collected:
+        if not is_cancelled and session is not None and collected:
             full_response = "".join(collected)
             updated = session.append_turn(message.question, full_response)
             await composition.session_repo.update(updated)
 
         await self._publisher.publish_done(message.job_id)
+
+    async def _is_cancelled(self, job_id: str) -> bool:
+        try:
+            status = await self._redis.hget(self._job_key(job_id), "status")
+            if status in (b"cancelled", "cancelled"):
+                return True
+            cancelled = await self._redis.hget(self._job_key(job_id), "cancelled")
+            if cancelled in (b"true", "true", b"1", "1"):
+                return True
+            if await self._redis.exists(
+                f"{self._job_key(job_id)}:cancelled", f"ai:job:{job_id}:cancelled"
+            ):
+                return True
+        except Exception:
+            logger.warning("취소 상태 확인 중 Redis 오류 발생: jobId=%s", job_id, exc_info=True)
+        return False
+
+    @staticmethod
+    def _job_key(job_id: str) -> str:
+        return f"job:{job_id}"
 
     async def _resolve_session(self, message: AskRequestedMessage) -> ConversationSession | None:
         session_repo = self._composition.session_repo
