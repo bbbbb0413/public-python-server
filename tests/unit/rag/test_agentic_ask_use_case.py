@@ -1,8 +1,13 @@
+import json
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from ai_service.knowledge.domain.port.vector_store_port import (
+    SimilaritySearchResult,
+    VectorDocumentMetadata,
+)
 from ai_service.llm_gateway.application.llm_gateway_service import LlmGatewayService
 from ai_service.prompt.application.get_active_prompt_use_case import GetActivePromptUseCase
 from ai_service.prompt.domain.model.prompt_template import PromptTemplate
@@ -313,3 +318,98 @@ async def test_agentic_ask_progress_callback_error_does_not_break_generation(
 
     chunks = [c async for c in use_case.execute(command)]
     assert "".join(chunks) == "테스트 답변입니다."
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_sources_include_snippet_and_mask_pii(
+    mock_hybrid_search: AsyncMock,
+    mock_llm_gateway: MagicMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    mock_critique_generator.generate.return_value = Critique.of(
+        answered=True, missing=[], next_query="", confidence=0.9
+    )
+
+    chunk1_text = "이것은 일반적인 문서 본문입니다."
+    chunk2_text = "사용자 연락처는 010-1234-5678 이며 개인정보입니다."
+    chunk3_text = "B" * 500
+
+    chunks = [
+        SimilaritySearchResult(
+            text=chunk1_text,
+            score=0.9,
+            metadata=VectorDocumentMetadata(
+                document_id="doc-1",
+                file_name="guide.pdf",
+                chunk_index=0,
+            ),
+        ),
+        SimilaritySearchResult(
+            text=chunk2_text,
+            score=0.85,
+            metadata=VectorDocumentMetadata(
+                document_id="doc-2",
+                file_name="privacy.pdf",
+                chunk_index=1,
+            ),
+        ),
+        SimilaritySearchResult(
+            text=chunk3_text,
+            score=0.8,
+            metadata=VectorDocumentMetadata(
+                document_id="doc-3",
+                file_name="long_doc.pdf",
+                chunk_index=2,
+            ),
+        ),
+    ]
+
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=chunks,
+        query_embedding=[0.1, 0.2],
+    )
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+    )
+
+    command = AgenticAskCommand(
+        question="출처 확인 질문",
+        budget=IterationBudget.of(max_iterations=1, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+    )
+
+    results = [c async for c in use_case.execute(command)]
+
+    assert len(results) > 0
+    assert results[0].startswith("__SOURCES:")
+
+    sources = json.loads(results[0][len("__SOURCES:") :])
+    assert len(sources) == 3
+
+    # chunk 1: 300자 이하 본문이 그대로 snippet에 들어있음
+    assert sources[0]["fileName"] == "guide.pdf"
+    assert sources[0]["chunkIndex"] == 0
+    assert sources[0]["documentId"] == "doc-1"
+    assert sources[0]["snippet"] == chunk1_text
+
+    # chunk 2: PII (전화번호) 마스킹 확인
+    assert sources[1]["fileName"] == "privacy.pdf"
+    assert "010-1234-5678" not in sources[1]["snippet"]
+    assert "[REDACTED_KR_PHONE]" in sources[1]["snippet"]
+
+    # chunk 3: 300자 초과 본문은 300자 + '...' 로 잘림
+    assert sources[2]["fileName"] == "long_doc.pdf"
+    assert len(sources[2]["snippet"]) == 303
+    assert sources[2]["snippet"] == "B" * 300 + "..."
+
