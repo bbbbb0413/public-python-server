@@ -12,6 +12,7 @@ from ai_service.rag.application.filter.secret_pii_scanner import SecretPiiScanne
 from ai_service.rag.application.get_session_use_case import GetSessionUseCase
 from ai_service.rag.application.get_sessions_use_case import GetSessionsUseCase
 from ai_service.rag.application.query_complexity_router import QueryComplexityRouter
+from ai_service.rag.domain.model.conversation_session import ConversationSession
 from ai_service.rag.domain.repository.conversation_session_repository import (
     IConversationSessionRepository,
 )
@@ -166,3 +167,66 @@ async def test_ask_requested_consumer_simple_does_not_publish_progress():
     ]
     assert len(progress_calls) == 0
 
+
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_appends_sources_to_session():
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+
+    sources_data = [
+        {"fileName": "test.pdf", "chunkIndex": 0, "documentId": "doc-1", "snippet": "테스트 요약"}
+    ]
+
+    ask_use_case_mock = MagicMock(spec=AskUseCase)
+
+    async def fake_ask_execute(_command) -> AsyncIterator[str]:
+        yield f"__SOURCES:{json.dumps(sources_data)}"
+        yield "답변입니다."
+
+    ask_use_case_mock.execute.side_effect = fake_ask_execute
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "simple"
+
+    validator_mock = MagicMock(spec=RagContentValidator)
+    validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
+
+    initial_session = ConversationSession.create("user-1", "질문입니다")
+    session_repo_mock = MagicMock(spec=IConversationSessionRepository)
+    session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
+    session_repo_mock.persist = AsyncMock(return_value=initial_session)
+    session_repo_mock.update = AsyncMock(return_value=initial_session)
+
+    composition = RagComposition(
+        ask_use_case=ask_use_case_mock,
+        agentic_ask_use_case=MagicMock(spec=AgenticAskUseCase),
+        query_complexity_router=router_mock,
+        rag_validator=validator_mock,
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(3, 1000, 5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    message = AskRequestedMessage(
+        job_id="test-job-999",
+        user_id="user-1",
+        question="질문입니다",
+        session_id=initial_session.get_session_id(),
+    )
+    await consumer._process(message)
+
+    # session_repo.update 호출 인자 검증
+    session_repo_mock.update.assert_awaited_once()
+    updated_session = session_repo_mock.update.await_args[0][0]
+    assert len(updated_session.turns) == 2
+    assert updated_session.turns[1].role == "assistant"
+    assert updated_session.turns[1].content == "답변입니다."
+    assert updated_session.turns[1].sources == sources_data
