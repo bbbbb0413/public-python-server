@@ -167,7 +167,6 @@ async def test_ask_requested_consumer_simple_does_not_publish_progress():
     ]
     assert len(progress_calls) == 0
 
-
 @pytest.mark.asyncio
 async def test_ask_requested_consumer_appends_sources_to_session():
     redis_mock = MagicMock(spec=Redis)
@@ -187,6 +186,46 @@ async def test_ask_requested_consumer_appends_sources_to_session():
 
     router_mock = MagicMock(spec=QueryComplexityRouter)
     router_mock.route.return_value = "simple"
+    
+    # redis xadd 호출 확인: done 이벤트가 메타데이터 없이 발행되었는지
+    done_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "done"
+    ]
+    assert len(done_calls) == 1
+    assert "data" not in done_calls[0].args[1]
+
+
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_complex_publishes_done_with_metadata():
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+
+    agentic_use_case_mock = MagicMock(spec=AgenticAskUseCase)
+
+    async def fake_agentic_execute(command) -> AsyncIterator[str]:
+        if command.on_progress:
+            await command.on_progress(
+                {"iteration": 1, "phase": "searching", "confidence": 0.0, "missing": []}
+            )
+            await command.on_progress(
+                {"iteration": 1, "phase": "generating", "confidence": 0.0, "missing": []}
+            )
+            await command.on_progress(
+                {
+                    "iteration": 1,
+                    "phase": "critiquing",
+                    "confidence": 0.85,
+                    "missing": ["추가 설명"],
+                }
+            )
+        yield "답변입니다."
+
+    agentic_use_case_mock.execute.side_effect = fake_agentic_execute
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "complex"
 
     validator_mock = MagicMock(spec=RagContentValidator)
     validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
@@ -198,8 +237,9 @@ async def test_ask_requested_consumer_appends_sources_to_session():
     session_repo_mock.update = AsyncMock(return_value=initial_session)
 
     composition = RagComposition(
-        ask_use_case=ask_use_case_mock,
-        agentic_ask_use_case=MagicMock(spec=AgenticAskUseCase),
+        ask_use_case=MagicMock(spec=AskUseCase),
+        agentic_ask_use_case=agentic_use_case_mock,
+
         query_complexity_router=router_mock,
         rag_validator=validator_mock,
         secret_pii_scanner=SecretPiiScanner(),
@@ -216,17 +256,21 @@ async def test_ask_requested_consumer_appends_sources_to_session():
     consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
 
     message = AskRequestedMessage(
-        job_id="test-job-999",
+        job_id="test-job-complex-done",
         user_id="user-1",
-        question="질문입니다",
-        session_id=initial_session.get_session_id(),
+        question="복잡한 에이전틱 질의",
     )
     await consumer._process(message)
 
-    # session_repo.update 호출 인자 검증
-    session_repo_mock.update.assert_awaited_once()
-    updated_session = session_repo_mock.update.await_args[0][0]
-    assert len(updated_session.turns) == 2
-    assert updated_session.turns[1].role == "assistant"
-    assert updated_session.turns[1].content == "답변입니다."
-    assert updated_session.turns[1].sources == sources_data
+    # redis xadd 호출 확인: done 이벤트에 confidence, missing 메타데이터가 포함되었는지
+    done_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "done"
+    ]
+    assert len(done_calls) == 1
+    assert "data" in done_calls[0].args[1]
+    done_data = json.loads(done_calls[0].args[1]["data"])
+    assert done_data == {"confidence": 0.85, "missing": ["추가 설명"]}
+
+

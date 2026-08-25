@@ -110,8 +110,16 @@ class AskRequestedConsumer:
             else self._should_use_hyde(message.question, composition.hyde_max_query_words)
         )
 
+        last_confidence: float | None = None
+        last_missing: list[str] | None = None
+
         if complexity == "complex":
             async def on_progress(data: dict[str, Any]) -> None:
+                nonlocal last_confidence, last_missing
+                if "confidence" in data:
+                    last_confidence = data["confidence"]
+                if "missing" in data:
+                    last_missing = data["missing"]
                 await self._publisher.publish_progress(message.job_id, data)
 
             stream = composition.agentic_ask_use_case.execute(
@@ -154,7 +162,14 @@ class AskRequestedConsumer:
             updated = session.append_turn(message.question, full_response, sources=sources)
             await composition.session_repo.update(updated)
 
-        await self._publisher.publish_done(message.job_id)
+        done_data: dict[str, Any] | None = None
+        if last_confidence is not None and last_missing is not None:
+            done_data = {
+                "confidence": last_confidence,
+                "missing": last_missing,
+            }
+
+        await self._publisher.publish_done(message.job_id, done_data)
 
     async def _resolve_session(self, message: AskRequestedMessage) -> ConversationSession | None:
         session_repo = self._composition.session_repo
