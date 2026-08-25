@@ -147,6 +147,7 @@ class AskRequestedConsumer:
             )
 
         collected: list[str] = []
+        sources: list[dict[str, Any]] | None = None
         async for chunk in stream:
             if chunk.startswith(_SOURCES_PREFIX):
                 sources = json.loads(chunk[len(_SOURCES_PREFIX) :])
@@ -158,7 +159,7 @@ class AskRequestedConsumer:
 
         if session is not None and collected:
             full_response = "".join(collected)
-            updated = session.append_turn(message.question, full_response)
+            updated = session.append_turn(message.question, full_response, sources=sources)
             await composition.session_repo.update(updated)
 
         done_data: dict[str, Any] | None = None

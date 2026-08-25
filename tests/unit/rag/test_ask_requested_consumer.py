@@ -12,6 +12,7 @@ from ai_service.rag.application.filter.secret_pii_scanner import SecretPiiScanne
 from ai_service.rag.application.get_session_use_case import GetSessionUseCase
 from ai_service.rag.application.get_sessions_use_case import GetSessionsUseCase
 from ai_service.rag.application.query_complexity_router import QueryComplexityRouter
+from ai_service.rag.domain.model.conversation_session import ConversationSession
 from ai_service.rag.domain.repository.conversation_session_repository import (
     IConversationSessionRepository,
 )
@@ -166,6 +167,26 @@ async def test_ask_requested_consumer_simple_does_not_publish_progress():
     ]
     assert len(progress_calls) == 0
 
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_appends_sources_to_session():
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+
+    sources_data = [
+        {"fileName": "test.pdf", "chunkIndex": 0, "documentId": "doc-1", "snippet": "테스트 요약"}
+    ]
+
+    ask_use_case_mock = MagicMock(spec=AskUseCase)
+
+    async def fake_ask_execute(_command) -> AsyncIterator[str]:
+        yield f"__SOURCES:{json.dumps(sources_data)}"
+        yield "답변입니다."
+
+    ask_use_case_mock.execute.side_effect = fake_ask_execute
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "simple"
+    
     # redis xadd 호출 확인: done 이벤트가 메타데이터 없이 발행되었는지
     done_calls = [
         call
@@ -209,14 +230,16 @@ async def test_ask_requested_consumer_complex_publishes_done_with_metadata():
     validator_mock = MagicMock(spec=RagContentValidator)
     validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
 
+    initial_session = ConversationSession.create("user-1", "질문입니다")
     session_repo_mock = MagicMock(spec=IConversationSessionRepository)
-    session_repo_mock.find_by_id = AsyncMock(return_value=None)
-    session_repo_mock.persist = AsyncMock(return_value=None)
-    session_repo_mock.update = AsyncMock(return_value=None)
+    session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
+    session_repo_mock.persist = AsyncMock(return_value=initial_session)
+    session_repo_mock.update = AsyncMock(return_value=initial_session)
 
     composition = RagComposition(
         ask_use_case=MagicMock(spec=AskUseCase),
         agentic_ask_use_case=agentic_use_case_mock,
+
         query_complexity_router=router_mock,
         rag_validator=validator_mock,
         secret_pii_scanner=SecretPiiScanner(),

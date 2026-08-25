@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from ai_service.rag.domain.vo.conversation_turn import ConversationTurn, TurnValue
 from ai_service.rag.domain.vo.session_id import SessionId
@@ -14,6 +14,9 @@ class TurnRecord:
     role: Literal["user", "assistant"]
     content: str
     created_at: datetime
+    sources: list[dict[str, Any]] | None = None
+    confidence: float | None = None
+    missing: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -54,7 +57,14 @@ class ConversationSession(AggregateRoot):
     def restore(cls, props: RestoreProps) -> "ConversationSession":
         turns = [
             ConversationTurn.restore(
-                TurnValue(role=t.role, content=t.content, created_at=t.created_at)
+                TurnValue(
+                    role=t.role,
+                    content=t.content,
+                    created_at=t.created_at,
+                    sources=t.sources,
+                    confidence=t.confidence,
+                    missing=t.missing,
+                )
             )
             for t in props.turns
         ]
@@ -67,11 +77,23 @@ class ConversationSession(AggregateRoot):
             props.updated_at,
         )
 
-    def append_turn(self, user_content: str, assistant_content: str) -> "ConversationSession":
+    def append_turn(
+        self,
+        user_content: str,
+        assistant_content: str,
+        sources: list[dict[str, Any]] | None = None,
+        confidence: float | None = None,
+        missing: list[str] | None = None,
+    ) -> "ConversationSession":
         new_turns = [
             *self._turns,
             ConversationTurn.of_user(user_content),
-            ConversationTurn.of_assistant(assistant_content),
+            ConversationTurn.of_assistant(
+                assistant_content,
+                sources=sources,
+                confidence=confidence,
+                missing=missing,
+            ),
         ]
         return ConversationSession(
             self._session_id,

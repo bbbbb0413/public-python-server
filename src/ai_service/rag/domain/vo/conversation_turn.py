@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from ai_service.shared_kernel.value_object import ValueObject
 
@@ -12,6 +12,9 @@ class TurnValue:
     role: TurnRole
     content: str
     created_at: datetime
+    sources: list[dict[str, Any]] | None = None
+    confidence: float | None = None
+    missing: list[str] | None = None
 
 
 class ConversationTurn(ValueObject[TurnValue]):
@@ -26,8 +29,23 @@ class ConversationTurn(ValueObject[TurnValue]):
         return cls(TurnValue(role="user", content=content, created_at=datetime.now(UTC)))
 
     @classmethod
-    def of_assistant(cls, content: str) -> "ConversationTurn":
-        return cls(TurnValue(role="assistant", content=content, created_at=datetime.now(UTC)))
+    def of_assistant(
+        cls,
+        content: str,
+        sources: list[dict[str, Any]] | None = None,
+        confidence: float | None = None,
+        missing: list[str] | None = None,
+    ) -> "ConversationTurn":
+        return cls(
+            TurnValue(
+                role="assistant",
+                content=content,
+                created_at=datetime.now(UTC),
+                sources=sources,
+                confidence=confidence,
+                missing=missing,
+            )
+        )
 
     @classmethod
     def restore(cls, value: TurnValue) -> "ConversationTurn":
@@ -44,3 +62,15 @@ class ConversationTurn(ValueObject[TurnValue]):
     @property
     def created_at(self) -> datetime:
         return self.get_value().created_at
+
+    @property
+    def sources(self) -> list[dict[str, Any]] | None:
+        return self.get_value().sources
+
+    @property
+    def confidence(self) -> float | None:
+        return self.get_value().confidence
+
+    @property
+    def missing(self) -> list[str] | None:
+        return self.get_value().missing

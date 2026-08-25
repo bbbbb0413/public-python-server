@@ -61,7 +61,14 @@ class ConversationSessionRepositoryImpl:
                 user_id=record["userId"],
                 title=record["title"],
                 turns=[
-                    TurnRecord(role=t["role"], content=t["content"], created_at=t["createdAt"])
+                    TurnRecord(
+                        role=t["role"],
+                        content=t["content"],
+                        created_at=t["createdAt"],
+                        sources=t.get("sources"),
+                        confidence=t.get("confidence"),
+                        missing=t.get("missing"),
+                    )
                     for t in record["turns"]
                 ],
                 created_at=record["createdAt"],
@@ -71,14 +78,26 @@ class ConversationSessionRepositoryImpl:
 
     @staticmethod
     def _to_record(session: ConversationSession) -> dict[str, Any]:
+        turns_data: list[dict[str, Any]] = []
+        for t in session.turns:
+            turn_dict: dict[str, Any] = {
+                "role": t.role,
+                "content": t.content,
+                "createdAt": t.created_at,
+            }
+            if t.sources is not None:
+                turn_dict["sources"] = t.sources
+            if t.confidence is not None:
+                turn_dict["confidence"] = t.confidence
+            if t.missing is not None:
+                turn_dict["missing"] = t.missing
+            turns_data.append(turn_dict)
+
         return {
             "sessionId": session.get_session_id(),
             "userId": session.get_user_id(),
             "title": session.title,
-            "turns": [
-                {"role": t.role, "content": t.content, "createdAt": t.created_at}
-                for t in session.turns
-            ],
+            "turns": turns_data,
             "createdAt": session.created_at,
             "updatedAt": session.updated_at,
         }
