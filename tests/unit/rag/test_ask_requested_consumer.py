@@ -29,6 +29,7 @@ from ai_service.rag.rag_composition import RagComposition
 async def test_ask_requested_consumer_complex_publishes_progress():
     redis_mock = MagicMock(spec=Redis)
     redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
 
     agentic_use_case_mock = MagicMock(spec=AgenticAskUseCase)
 
@@ -115,6 +116,7 @@ async def test_ask_requested_consumer_complex_publishes_progress():
 async def test_ask_requested_consumer_simple_does_not_publish_progress():
     redis_mock = MagicMock(spec=Redis)
     redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
 
     ask_use_case_mock = MagicMock(spec=AskUseCase)
 
@@ -167,10 +169,21 @@ async def test_ask_requested_consumer_simple_does_not_publish_progress():
     ]
     assert len(progress_calls) == 0
 
+    # redis xadd 호출 확인: done 이벤트가 메타데이터 없이 발행되었는지
+    done_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "done"
+    ]
+    assert len(done_calls) == 1
+    assert "data" not in done_calls[0].args[1]
+
+
 @pytest.mark.asyncio
 async def test_ask_requested_consumer_appends_sources_to_session():
     redis_mock = MagicMock(spec=Redis)
     redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
 
     sources_data = [
         {"fileName": "test.pdf", "chunkIndex": 0, "documentId": "doc-1", "snippet": "테스트 요약"}
@@ -186,21 +199,56 @@ async def test_ask_requested_consumer_appends_sources_to_session():
 
     router_mock = MagicMock(spec=QueryComplexityRouter)
     router_mock.route.return_value = "simple"
-    
-    # redis xadd 호출 확인: done 이벤트가 메타데이터 없이 발행되었는지
-    done_calls = [
-        call
-        for call in redis_mock.xadd.await_args_list
-        if call.args[1].get("type") == "done"
-    ]
-    assert len(done_calls) == 1
-    assert "data" not in done_calls[0].args[1]
+
+    validator_mock = MagicMock(spec=RagContentValidator)
+    validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
+
+    initial_session = ConversationSession.create("user-1", "질문입니다")
+    session_repo_mock = MagicMock(spec=IConversationSessionRepository)
+    session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
+    session_repo_mock.persist = AsyncMock(return_value=initial_session)
+    session_repo_mock.update = AsyncMock(return_value=initial_session)
+
+    composition = RagComposition(
+        ask_use_case=ask_use_case_mock,
+        agentic_ask_use_case=MagicMock(spec=AgenticAskUseCase),
+        query_complexity_router=router_mock,
+        rag_validator=validator_mock,
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(3, 1000, 5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    message = AskRequestedMessage(
+        job_id="test-job-999",
+        user_id="user-1",
+        question="질문입니다",
+        session_id=initial_session.get_session_id(),
+    )
+    await consumer._process(message)
+
+    # session_repo.update 호출 인자 검증
+    session_repo_mock.update.assert_awaited_once()
+    updated_session = session_repo_mock.update.await_args[0][0]
+    assert len(updated_session.turns) == 2
+    assert updated_session.turns[1].role == "assistant"
+    assert updated_session.turns[1].content == "답변입니다."
+    assert updated_session.turns[1].sources == sources_data
 
 
 @pytest.mark.asyncio
 async def test_ask_requested_consumer_complex_publishes_done_with_metadata():
     redis_mock = MagicMock(spec=Redis)
     redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
 
     agentic_use_case_mock = MagicMock(spec=AgenticAskUseCase)
 
@@ -272,5 +320,86 @@ async def test_ask_requested_consumer_complex_publishes_done_with_metadata():
     assert "data" in done_calls[0].args[1]
     done_data = json.loads(done_calls[0].args[1]["data"])
     assert done_data == {"confidence": 0.85, "missing": ["추가 설명"]}
+
+
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_cancelled_stops_token_streaming():
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+
+    # 첫 토큰 이후 취소 플래그가 설정된 상황을 모사
+    # get(f"job:{job_id}:cancelled") 호출 시 1회차는 None, 2회차는 b"1" (또는 "true")
+    redis_mock.get = AsyncMock(side_effect=[None, b"1", b"1"])
+
+    ask_use_case_mock = MagicMock(spec=AskUseCase)
+
+    async def fake_ask_execute(_command) -> AsyncIterator[str]:
+        yield "첫번째 토큰 "
+        yield "두번째 토큰 "
+        yield "세번째 토큰 "
+
+    ask_use_case_mock.execute.side_effect = fake_ask_execute
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "simple"
+
+    validator_mock = MagicMock(spec=RagContentValidator)
+    validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
+
+    initial_session = ConversationSession.create("user-1", "질문입니다")
+    session_repo_mock = MagicMock(spec=IConversationSessionRepository)
+    session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
+    session_repo_mock.persist = AsyncMock(return_value=initial_session)
+    session_repo_mock.update = AsyncMock(return_value=initial_session)
+
+    composition = RagComposition(
+        ask_use_case=ask_use_case_mock,
+        agentic_ask_use_case=MagicMock(spec=AgenticAskUseCase),
+        query_complexity_router=router_mock,
+        rag_validator=validator_mock,
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(3, 1000, 5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    message = AskRequestedMessage(
+        job_id="test-job-cancel-123",
+        user_id="user-1",
+        question="질문입니다",
+        session_id=initial_session.get_session_id(),
+    )
+    await consumer._process(message)
+
+    # 토큰 발행은 첫번째 토큰만 이루어져야 함
+    token_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "token"
+    ]
+    assert len(token_calls) == 1
+    assert token_calls[0].args[1]["data"] == "첫번째 토큰 "
+
+    # 세션 저장은 중단 시점까지 수집된 "첫번째 토큰 "으로 완료되어야 함
+    session_repo_mock.update.assert_awaited_once()
+    updated_session = session_repo_mock.update.await_args[0][0]
+    assert len(updated_session.turns) == 2
+    assert updated_session.turns[1].content == "첫번째 토큰 "
+
+    # done 이벤트가 정상 발행되어야 함
+    done_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "done"
+    ]
+    assert len(done_calls) == 1
+
 
 

@@ -49,6 +49,7 @@ class AskRequestedMessage:
 class AskRequestedConsumer:
     def __init__(self, brokers: str, redis_client: Redis, composition: RagComposition) -> None:
         self._brokers = brokers
+        self._redis = redis_client
         self._publisher = JobEventPublisher(redis_client)
         self._composition = composition
         self._consumer: AIOKafkaConsumer | None = None
@@ -149,6 +150,11 @@ class AskRequestedConsumer:
         collected: list[str] = []
         sources: list[dict[str, Any]] | None = None
         async for chunk in stream:
+            is_cancelled = await self._redis.get(f"job:{message.job_id}:cancelled")
+            if is_cancelled:
+                logger.info("ask job 취소 감지됨: jobId=%s", message.job_id)
+                break
+
             if chunk.startswith(_SOURCES_PREFIX):
                 sources = json.loads(chunk[len(_SOURCES_PREFIX) :])
                 await self._publisher.publish_sources(message.job_id, sources)
