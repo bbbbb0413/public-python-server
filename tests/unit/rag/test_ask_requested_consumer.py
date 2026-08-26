@@ -402,4 +402,79 @@ async def test_ask_requested_consumer_cancelled_stops_token_streaming():
     assert len(done_calls) == 1
 
 
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_cancelled_before_first_chunk():
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+
+    # 스트림 진입 전부터 이미 취소 플래그가 설정되어 있는 상황
+    redis_mock.get = AsyncMock(return_value=b"1")
+
+    ask_use_case_mock = MagicMock(spec=AskUseCase)
+
+    async def fake_ask_execute(_command) -> AsyncIterator[str]:
+        yield "첫번째 토큰 "
+        yield "두번째 토큰 "
+
+    ask_use_case_mock.execute.side_effect = fake_ask_execute
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "simple"
+
+    validator_mock = MagicMock(spec=RagContentValidator)
+    validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
+
+    initial_session = ConversationSession.create("user-1", "질문입니다")
+    session_repo_mock = MagicMock(spec=IConversationSessionRepository)
+    session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
+    session_repo_mock.persist = AsyncMock(return_value=initial_session)
+    session_repo_mock.update = AsyncMock(return_value=initial_session)
+
+    composition = RagComposition(
+        ask_use_case=ask_use_case_mock,
+        agentic_ask_use_case=MagicMock(spec=AgenticAskUseCase),
+        query_complexity_router=router_mock,
+        rag_validator=validator_mock,
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(3, 1000, 5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    message = AskRequestedMessage(
+        job_id="test-job-cancel-immediate",
+        user_id="user-1",
+        question="질문입니다",
+        session_id=initial_session.get_session_id(),
+    )
+    await consumer._process(message)
+
+    # 토큰 발행이 전혀 되지 않아야 함
+    token_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "token"
+    ]
+    assert len(token_calls) == 0
+
+    # 수집된 토큰이 없으므로 session_repo.update가 호출되지 않음
+    session_repo_mock.update.assert_not_called()
+
+    # done 이벤트는 발행되어야 함
+    done_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "done"
+    ]
+    assert len(done_calls) == 1
+
+
+
 
