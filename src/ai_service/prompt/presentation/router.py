@@ -10,6 +10,7 @@ from ai_service.prompt.application.exceptions import PromptTemplateNotFoundError
 from ai_service.prompt.presentation.deps import (
     ActivatePromptUseCaseDep,
     CreatePromptUseCaseDep,
+    DeactivateActivePromptUseCaseDep,
     GetActivePromptUseCaseDep,
     PromptTemplateRepositoryDep,
 )
@@ -36,16 +37,34 @@ async def list_versions(name: str, repo: PromptTemplateRepositoryDep) -> list[Pr
 
 @router.get("/{name}/active", response_model=PromptOut, response_model_by_alias=True)
 async def get_active(
-    name: str, use_case: GetActivePromptUseCaseDep, user_id: str | None = Query(default=None)
+    name: str,
+    use_case: GetActivePromptUseCaseDep,
+    user_id: str | None = Query(default=None, alias="userId"),
 ) -> PromptOut:
     template = await use_case.execute(name, user_id)
     return PromptOut.from_domain(template)
 
 
 @router.patch("/{name}/{version}/activate", response_model=PromptOut, response_model_by_alias=True)
-async def activate(name: str, version: int, use_case: ActivatePromptUseCaseDep) -> PromptOut:
+async def activate(
+    name: str,
+    version: int,
+    use_case: ActivatePromptUseCaseDep,
+    user_id: str | None = Query(default=None, alias="userId"),
+) -> PromptOut:
     try:
-        template = await use_case.execute(ActivatePromptCommand(name=name, version=version))
+        template = await use_case.execute(
+            ActivatePromptCommand(name=name, version=version, user_id=user_id)
+        )
     except PromptTemplateNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return PromptOut.from_domain(template)
+
+
+@router.delete("/{name}/active", status_code=204)
+async def reset_active_for_user(
+    name: str,
+    use_case: DeactivateActivePromptUseCaseDep,
+    user_id: str = Query(..., alias="userId"),
+) -> None:
+    await use_case.execute(name, user_id)

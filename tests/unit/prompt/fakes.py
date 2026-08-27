@@ -24,7 +24,7 @@ class FakePromptTemplateRepository:
 
     async def find_active(self, name: str) -> PromptTemplate | None:
         for (n, _), t in self.storage.items():
-            if n == name and t.is_active:
+            if n == name and t.user_id is None and t.is_active:
                 return t
         return None
 
@@ -36,8 +36,16 @@ class FakePromptTemplateRepository:
 
     async def deactivate_all_by_name(self, name: str) -> None:
         for key, t in list(self.storage.items()):
-            if key[0] == name and t.is_active:
+            if key[0] == name and t.user_id is None and t.is_active:
                 self.storage[key] = t.deactivate()
+
+    async def deactivate_all_by_name_for_user(self, name: str, user_id: str) -> None:
+        for key, t in list(self.storage.items()):
+            if key[0] == name and t.user_id == user_id and t.is_active:
+                self.storage[key] = t.deactivate()
+
+    async def deactivate_active_for_user(self, name: str, user_id: str) -> None:
+        await self.deactivate_all_by_name_for_user(name, user_id)
 
     async def update(self, template: PromptTemplate) -> PromptTemplate:
         self.storage[(template.name.get_value(), template.version)] = template

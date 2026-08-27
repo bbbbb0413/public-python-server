@@ -42,3 +42,17 @@ async def test_prefers_user_specific_active_over_global() -> None:
     template = await use_case.execute("rag-qa-system", user_id="user-1")
 
     assert template.content == "for-user"
+
+
+async def test_other_users_active_prompt_never_leaks_as_fallback() -> None:
+    repo = FakePromptTemplateRepository()
+    user1_active = PromptTemplate.create(
+        name="rag-qa-system", content="user-1-only", user_id="user-1"
+    ).activate()
+    repo.storage[("rag-qa-system", user1_active.version)] = user1_active
+
+    use_case = GetActivePromptUseCase(repo)
+    template = await use_case.execute("rag-qa-system", user_id="user-2")
+
+    assert template.content != "user-1-only"
+    assert template.content == RAG_QA_DEFAULT_PROMPT

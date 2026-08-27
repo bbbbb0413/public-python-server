@@ -42,7 +42,9 @@ class PromptTemplateRepositoryImpl:
         return [self._to_domain(r) for r in records]
 
     async def find_active(self, name: str) -> PromptTemplate | None:
-        record = await self._collection.find_one({"name": name, "isActive": True})
+        record = await self._collection.find_one(
+            {"name": name, "userId": {"$exists": False}, "isActive": True}
+        )
         return self._to_domain(record) if record else None
 
     async def find_active_for_user(self, name: str, user_id: str) -> PromptTemplate | None:
@@ -53,7 +55,19 @@ class PromptTemplateRepositoryImpl:
 
     async def deactivate_all_by_name(self, name: str) -> None:
         await self._collection.update_many(
-            {"name": name},
+            {"name": name, "userId": {"$exists": False}},
+            {"$set": {"isActive": False, "updatedAt": datetime.now(UTC)}},
+        )
+
+    async def deactivate_all_by_name_for_user(self, name: str, user_id: str) -> None:
+        await self._collection.update_many(
+            {"name": name, "userId": user_id},
+            {"$set": {"isActive": False, "updatedAt": datetime.now(UTC)}},
+        )
+
+    async def deactivate_active_for_user(self, name: str, user_id: str) -> None:
+        await self._collection.update_many(
+            {"name": name, "userId": user_id, "isActive": True},
             {"$set": {"isActive": False, "updatedAt": datetime.now(UTC)}},
         )
 
