@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator, Callable
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from ai_service.llm_gateway.domain.model.llm_message import LlmMessage, LlmOptions
+from ai_service.llm_gateway.schemas import LlmMessage, LlmOptions
 
 
 def _to_langchain_messages(

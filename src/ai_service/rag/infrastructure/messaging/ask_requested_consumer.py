@@ -7,11 +7,11 @@ from typing import Any
 from aiokafka import AIOKafkaConsumer
 from redis.asyncio import Redis
 
+from ai_service.core.events import JobEventPublisher
 from ai_service.rag.application.ask_command import AskCommand
 from ai_service.rag.application.command.agentic_ask_command import AgenticAskCommand
-from ai_service.rag.domain.model.conversation_session import ConversationSession
 from ai_service.rag.rag_composition import RagComposition
-from ai_service.shared_kernel.messaging.job_event_publisher import JobEventPublisher
+from ai_service.rag.schemas import ConversationSession
 
 logger = logging.getLogger(__name__)
 

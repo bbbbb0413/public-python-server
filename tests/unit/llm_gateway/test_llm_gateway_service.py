@@ -1,7 +1,4 @@
-from ai_service.config.settings import Settings
-from ai_service.llm_gateway.application.command.gateway_call_command import (
-    GatewayCallCommand,
-)
+from ai_service.core.config import Settings
 from ai_service.llm_gateway.application.cost_tracking_service import (
     CostTrackingService,
     ModelCostEntry,
@@ -9,7 +6,7 @@ from ai_service.llm_gateway.application.cost_tracking_service import (
 from ai_service.llm_gateway.application.fallback_service import FallbackService
 from ai_service.llm_gateway.application.llm_gateway_service import LlmGatewayService
 from ai_service.llm_gateway.application.llm_routing_service import LlmRoutingService
-from ai_service.llm_gateway.domain.model.llm_message import LlmMessage
+from ai_service.llm_gateway.schemas import GatewayCallCommand, LlmMessage
 from tests.unit.llm_gateway.fakes import (
     FakeCircuitBreaker,
     FakeLlmCostLogRepository,

@@ -4,7 +4,7 @@ from ai_service.llm_gateway.application.cost_tracking_service import (
     TrackParams,
     parse_cost_table,
 )
-from ai_service.llm_gateway.domain.vo.token_usage import TokenUsage
+from ai_service.llm_gateway.schemas import TokenUsage
 from tests.unit.llm_gateway.fakes import FailingLlmCostLogRepository, FakeLlmCostLogRepository
 
 

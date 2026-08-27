@@ -4,8 +4,8 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from ai_service.main import app
-from ai_service.observability.domain.ragas_evaluation import RagasEvaluation
-from ai_service.observability.presentation.deps import get_ragas_evaluation_repository
+from ai_service.observability.dependencies import get_ragas_evaluation_repository
+from ai_service.observability.schemas import RagasEvaluation
 from tests.unit.observability.fakes import FakeRagasEvaluationRepository
 
 

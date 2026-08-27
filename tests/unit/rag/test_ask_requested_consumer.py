@@ -12,17 +12,17 @@ from ai_service.rag.application.filter.secret_pii_scanner import SecretPiiScanne
 from ai_service.rag.application.get_session_use_case import GetSessionUseCase
 from ai_service.rag.application.get_sessions_use_case import GetSessionsUseCase
 from ai_service.rag.application.query_complexity_router import QueryComplexityRouter
-from ai_service.rag.domain.model.conversation_session import ConversationSession
-from ai_service.rag.domain.repository.conversation_session_repository import (
-    IConversationSessionRepository,
-)
-from ai_service.rag.domain.vo.guardrail_verdict import GuardrailVerdict
-from ai_service.rag.domain.vo.iteration_budget import IterationBudget
 from ai_service.rag.infrastructure.messaging.ask_requested_consumer import (
     AskRequestedConsumer,
     AskRequestedMessage,
 )
 from ai_service.rag.rag_composition import RagComposition
+from ai_service.rag.repository import ConversationSessionRepository
+from ai_service.rag.schemas import (
+    ConversationSession,
+    GuardrailVerdict,
+    IterationBudget,
+)
 
 
 @pytest.mark.asyncio
@@ -54,7 +54,7 @@ async def test_ask_requested_consumer_complex_publishes_progress():
     validator_mock = MagicMock(spec=RagContentValidator)
     validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
 
-    session_repo_mock = MagicMock(spec=IConversationSessionRepository)
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
     session_repo_mock.find_by_id = AsyncMock(return_value=None)
     session_repo_mock.persist = AsyncMock(return_value=None)
     session_repo_mock.update = AsyncMock(return_value=None)
@@ -131,7 +131,7 @@ async def test_ask_requested_consumer_simple_does_not_publish_progress():
     validator_mock = MagicMock(spec=RagContentValidator)
     validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
 
-    session_repo_mock = MagicMock(spec=IConversationSessionRepository)
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
     session_repo_mock.find_by_id = AsyncMock(return_value=None)
     session_repo_mock.persist = AsyncMock(return_value=None)
     session_repo_mock.update = AsyncMock(return_value=None)
@@ -204,7 +204,7 @@ async def test_ask_requested_consumer_appends_sources_to_session():
     validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
 
     initial_session = ConversationSession.create("user-1", "질문입니다")
-    session_repo_mock = MagicMock(spec=IConversationSessionRepository)
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
     session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
     session_repo_mock.persist = AsyncMock(return_value=initial_session)
     session_repo_mock.update = AsyncMock(return_value=initial_session)
@@ -279,7 +279,7 @@ async def test_ask_requested_consumer_complex_publishes_done_with_metadata():
     validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
 
     initial_session = ConversationSession.create("user-1", "질문입니다")
-    session_repo_mock = MagicMock(spec=IConversationSessionRepository)
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
     session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
     session_repo_mock.persist = AsyncMock(return_value=initial_session)
     session_repo_mock.update = AsyncMock(return_value=initial_session)
@@ -347,7 +347,7 @@ async def test_ask_requested_consumer_cancelled_stops_token_streaming():
     validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
 
     initial_session = ConversationSession.create("user-1", "질문입니다")
-    session_repo_mock = MagicMock(spec=IConversationSessionRepository)
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
     session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
     session_repo_mock.persist = AsyncMock(return_value=initial_session)
     session_repo_mock.update = AsyncMock(return_value=initial_session)
@@ -425,7 +425,7 @@ async def test_ask_requested_consumer_cancelled_before_first_chunk():
     validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
 
     initial_session = ConversationSession.create("user-1", "질문입니다")
-    session_repo_mock = MagicMock(spec=IConversationSessionRepository)
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
     session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
     session_repo_mock.persist = AsyncMock(return_value=initial_session)
     session_repo_mock.update = AsyncMock(return_value=initial_session)

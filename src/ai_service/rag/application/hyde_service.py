@@ -1,7 +1,7 @@
 import re
+from typing import Any
 
-from ai_service.llm_gateway.domain.model.llm_message import LlmMessage
-from ai_service.llm_gateway.domain.port.llm_provider_port import ILlmProvider
+from ai_service.llm_gateway.schemas import LlmMessage
 
 MIN_QUERY_WORDS = 3
 MAX_QUERY_WORDS = 10
@@ -10,7 +10,7 @@ _WHITESPACE_PATTERN = re.compile(r"\s+")
 
 
 class HydeService:
-    def __init__(self, llm_provider: ILlmProvider) -> None:
+    def __init__(self, llm_provider: Any) -> None:
         self._llm_provider = llm_provider
 
     def _get_word_count(self, text: str) -> int:
@@ -26,6 +26,11 @@ class HydeService:
         word_count = self._get_word_count(trimmed)
         return MIN_QUERY_WORDS <= word_count <= MAX_QUERY_WORDS
 
+    async def generate_hypothetical_document(self, question: str) -> str | None:
+        if not self.should_apply(question):
+            return None
+        return await self.generate_hypothetical(question)
+
     async def generate_hypothetical(self, question: str) -> str:
         messages = [
             LlmMessage(
@@ -40,3 +45,6 @@ class HydeService:
 
         tokens = [token async for token in self._llm_provider.stream(messages)]
         return "".join(tokens)
+
+
+__all__ = ["HydeService", "MAX_QUERY_WORDS", "MIN_QUERY_WORDS"]

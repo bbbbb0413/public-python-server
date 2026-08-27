@@ -4,7 +4,7 @@ from ai_service.llm_gateway.application.fallback_service import (
     AllFallbacksFailedError,
     FallbackService,
 )
-from ai_service.llm_gateway.domain.model.llm_message import LlmMessage
+from ai_service.llm_gateway.schemas import LlmMessage
 from tests.unit.llm_gateway.fakes import FakeCircuitBreaker, FakeLlmProvider
 
 

@@ -1,6 +1,6 @@
 import pytest
 
-from ai_service.llm_gateway.domain.vo.token_usage import TokenUsage
+from ai_service.llm_gateway.schemas import TokenUsage
 
 
 def test_of_creates_valid_token_usage() -> None:

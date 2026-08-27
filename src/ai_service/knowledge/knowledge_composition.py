@@ -1,19 +1,15 @@
 from dataclasses import dataclass
+from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from qdrant_client import AsyncQdrantClient
 
-from ai_service.config.settings import Settings
+from ai_service.core.config import Settings
 from ai_service.knowledge.application.ingest_document_use_case import IngestDocumentUseCase
-from ai_service.knowledge.domain.port.vector_store_port import IVectorStorePort
-from ai_service.knowledge.domain.repository.document_repository import IDocumentRepository
-from ai_service.knowledge.infrastructure.persistence.document_repository_impl import (
-    DocumentRepositoryImpl,
-)
 from ai_service.knowledge.infrastructure.providers.embedding_factory import (
     build_embedding_provider,
 )
-from ai_service.knowledge.infrastructure.vector.qdrant_vector_adapter import QdrantVectorAdapter
+from ai_service.knowledge.repository import DocumentRepository, QdrantVectorAdapter
 from ai_service.llm_gateway.infrastructure.providers.factory import build_llm_provider
 from ai_service.rag.application.filter.rag_content_validator import RagContentValidator
 
@@ -21,8 +17,8 @@ from ai_service.rag.application.filter.rag_content_validator import RagContentVa
 @dataclass
 class KnowledgeComposition:
     ingest_use_case: IngestDocumentUseCase
-    document_repo: IDocumentRepository
-    vector_store: IVectorStorePort
+    document_repo: DocumentRepository | Any
+    vector_store: QdrantVectorAdapter | Any
 
 
 async def build_knowledge_composition(
@@ -36,7 +32,7 @@ async def build_knowledge_composition(
     vector_store = QdrantVectorAdapter(qdrant_client, settings.embedding_dimension)
     await vector_store.ensure_collection()
 
-    document_repo = DocumentRepositoryImpl(mongo_db)
+    document_repo = DocumentRepository(mongo_db)
     rag_validator = RagContentValidator()
 
     ingest_use_case = IngestDocumentUseCase(
@@ -53,3 +49,6 @@ async def build_knowledge_composition(
         document_repo=document_repo,
         vector_store=vector_store,
     )
+
+
+__all__ = ["KnowledgeComposition", "build_knowledge_composition"]

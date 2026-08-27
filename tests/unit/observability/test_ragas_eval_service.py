@@ -1,9 +1,6 @@
-from ai_service.config.settings import Settings
-from ai_service.observability.application.ragas_eval_payload import RagasEvalPayload
-from ai_service.observability.application.ragas_eval_service import (
-    RagasEvalService,
-    RagasScores,
-)
+from ai_service.core.config import Settings
+from ai_service.observability.schemas import RagasEvalPayload, RagasScores
+from ai_service.observability.service import RagasEvalService
 from tests.unit.observability.fakes import FakeRagasEvaluationRepository
 
 

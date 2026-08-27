@@ -1,7 +1,7 @@
 import re
+from typing import Any
 
-from ai_service.llm_gateway.domain.model.llm_message import LlmMessage
-from ai_service.llm_gateway.domain.port.llm_provider_port import ILlmProvider
+from ai_service.llm_gateway.schemas import LlmMessage
 
 MAX_SUB_QUERIES = 3
 COMPOUND_INDICATORS = [
@@ -20,7 +20,7 @@ _LEADING_DASH_PATTERN = re.compile(r"^-\s*")
 
 
 class QueryDecomposer:
-    def __init__(self, llm_provider: ILlmProvider) -> None:
+    def __init__(self, llm_provider: Any) -> None:
         self._llm_provider = llm_provider
 
     def should_decompose(self, question: str) -> bool:
@@ -49,3 +49,6 @@ class QueryDecomposer:
         sub_queries = [line for line in sub_queries if line][:MAX_SUB_QUERIES]
 
         return sub_queries if sub_queries else [question]
+
+
+__all__ = ["COMPOUND_INDICATORS", "MAX_SUB_QUERIES", "QueryDecomposer"]

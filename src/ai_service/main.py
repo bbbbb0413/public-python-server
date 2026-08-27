@@ -6,23 +6,21 @@ from fastapi import FastAPI
 from motor.motor_asyncio import AsyncIOMotorClient
 from redis.asyncio import Redis
 
-from ai_service.config.settings import get_settings
+from ai_service.core.config import get_settings
 from ai_service.knowledge.infrastructure.messaging.ingest_requested_consumer import (
     IngestRequestedConsumer,
 )
 from ai_service.knowledge.knowledge_composition import build_knowledge_composition
-from ai_service.knowledge.presentation.router import router as knowledge_router
-from ai_service.llm_gateway.infrastructure.circuit_breaker_adapter import (
-    CIRCUIT_BREAKER_DB,
-)
-from ai_service.llm_gateway.presentation.router import router as llm_gateway_router
-from ai_service.observability.presentation.router import router as observability_router
-from ai_service.prompt.presentation.router import router as prompt_router
+from ai_service.knowledge.router import router as knowledge_router
+from ai_service.llm_gateway.circuit_breaker import CIRCUIT_BREAKER_DB
+from ai_service.llm_gateway.router import router as llm_gateway_router
+from ai_service.observability.router import router as observability_router
+from ai_service.prompt.router import router as prompt_router
 from ai_service.rag.infrastructure.messaging.ask_requested_consumer import (
     AskRequestedConsumer,
 )
-from ai_service.rag.presentation.router import router as rag_router
 from ai_service.rag.rag_composition import build_rag_composition
+from ai_service.rag.router import router as rag_router
 
 
 @asynccontextmanager
@@ -86,3 +84,6 @@ app.include_router(knowledge_router)
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+__all__ = ["app"]

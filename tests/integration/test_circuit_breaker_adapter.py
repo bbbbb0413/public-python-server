@@ -1,7 +1,7 @@
 import pytest
 
-from ai_service.llm_gateway.domain.model.circuit_breaker_state import FAILURE_THRESHOLD
-from ai_service.llm_gateway.infrastructure.circuit_breaker_adapter import (
+from ai_service.llm_gateway.circuit_breaker import (
+    FAILURE_THRESHOLD,
     CircuitBreakerAdapter,
 )
 

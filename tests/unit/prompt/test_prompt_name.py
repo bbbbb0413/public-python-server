@@ -1,6 +1,6 @@
 import pytest
 
-from ai_service.prompt.domain.vo.prompt_name import PromptName
+from ai_service.prompt.schemas import PromptName
 
 
 def test_valid_name() -> None:

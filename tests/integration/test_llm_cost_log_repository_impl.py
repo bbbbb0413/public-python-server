@@ -2,16 +2,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from ai_service.llm_gateway.domain.repository.llm_cost_log_repository import LlmCostLog
-from ai_service.llm_gateway.infrastructure.persistence.llm_cost_log_repository_impl import (
-    LlmCostLogRepositoryImpl,
-)
+from ai_service.llm_gateway.repository import LlmCostLog, LlmCostLogRepository
 
 pytestmark = pytest.mark.integration
 
 
 async def test_persist_and_sum_by_model(mongo_test_db) -> None:  # type: ignore[no-untyped-def]
-    repo = LlmCostLogRepositoryImpl(mongo_test_db)
+    repo = LlmCostLogRepository(mongo_test_db)
     now = datetime.now(UTC)
 
     await repo.persist(
@@ -32,8 +29,8 @@ async def test_persist_and_sum_by_model(mongo_test_db) -> None:  # type: ignore[
             model="model-a",
             feature="qa",
             tenant="default",
-            prompt_tokens=100,
-            completion_tokens=50,
+            prompt_tokens=200,
+            completion_tokens=100,
             cost_usd=2.5,
             fallback_used=False,
             attempted_models=["model-a"],
@@ -45,8 +42,8 @@ async def test_persist_and_sum_by_model(mongo_test_db) -> None:  # type: ignore[
             model="model-b",
             feature="qa",
             tenant="default",
-            prompt_tokens=10,
-            completion_tokens=10,
+            prompt_tokens=50,
+            completion_tokens=20,
             cost_usd=0.5,
             fallback_used=False,
             attempted_models=["model-b"],
@@ -54,32 +51,52 @@ async def test_persist_and_sum_by_model(mongo_test_db) -> None:  # type: ignore[
         )
     )
 
-    results = await repo.sum_by_model(now - timedelta(hours=1), now + timedelta(hours=1))
+    from_ = now - timedelta(hours=1)
+    to = now + timedelta(hours=1)
+    sums = await repo.sum_by_model(from_, to)
 
-    by_model = {r.model: r.total_cost_usd for r in results}
-    assert by_model["model-a"] == pytest.approx(4.0)
-    assert by_model["model-b"] == pytest.approx(0.5)
+    assert len(sums) == 2
+    model_a_sum = next(s for s in sums if s.model == "model-a")
+    model_b_sum = next(s for s in sums if s.model == "model-b")
+    assert model_a_sum.total_cost_usd == 4.0
+    assert model_b_sum.total_cost_usd == 0.5
 
 
-async def test_sum_by_model_excludes_out_of_range(mongo_test_db) -> None:  # type: ignore[no-untyped-def]
-    repo = LlmCostLogRepositoryImpl(mongo_test_db)
-    old = datetime(2020, 1, 1, tzinfo=UTC)
+async def test_sum_by_model_filters_by_date(mongo_test_db) -> None:  # type: ignore[no-untyped-def]
+    repo = LlmCostLogRepository(mongo_test_db)
+    old = datetime(2025, 1, 1, tzinfo=UTC)
+    recent = datetime(2026, 1, 1, tzinfo=UTC)
 
     await repo.persist(
         LlmCostLog(
-            model="model-old",
+            model="model-a",
             feature="qa",
             tenant="default",
-            prompt_tokens=1,
-            completion_tokens=1,
-            cost_usd=99.0,
+            prompt_tokens=10,
+            completion_tokens=10,
+            cost_usd=1.0,
             fallback_used=False,
-            attempted_models=["model-old"],
+            attempted_models=["model-a"],
             created_at=old,
         )
     )
+    await repo.persist(
+        LlmCostLog(
+            model="model-a",
+            feature="qa",
+            tenant="default",
+            prompt_tokens=10,
+            completion_tokens=10,
+            cost_usd=2.0,
+            fallback_used=False,
+            attempted_models=["model-a"],
+            created_at=recent,
+        )
+    )
 
-    now = datetime.now(UTC)
-    results = await repo.sum_by_model(now - timedelta(hours=1), now + timedelta(hours=1))
+    from_ = datetime(2026, 1, 1, tzinfo=UTC)
+    to = datetime(2026, 1, 2, tzinfo=UTC)
+    sums = await repo.sum_by_model(from_, to)
 
-    assert all(r.model != "model-old" for r in results)
+    assert len(sums) == 1
+    assert sums[0].total_cost_usd == 2.0

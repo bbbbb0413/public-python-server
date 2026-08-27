@@ -1,5 +1,6 @@
-from ai_service.llm_gateway.domain.model.llm_message import LlmMessage
-from ai_service.llm_gateway.domain.port.llm_provider_port import ILlmProvider
+from typing import Any
+
+from ai_service.llm_gateway.schemas import LlmMessage
 
 MAX_HISTORY_TURNS = 4
 
@@ -34,7 +35,7 @@ FOLLOW_UP_INDICATORS = [
 
 
 class ConversationalQueryRewriter:
-    def __init__(self, llm_provider: ILlmProvider) -> None:
+    def __init__(self, llm_provider: Any) -> None:
         self._llm_provider = llm_provider
 
     def is_follow_up(self, question: str, history: list[dict[str, str]]) -> bool:

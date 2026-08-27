@@ -1,4 +1,4 @@
-from ai_service.prompt.domain.model.prompt_template import PromptTemplate
+from ai_service.prompt.schemas import PromptTemplate, PromptTemplateProps
 
 
 class FakePromptTemplateRepository:
@@ -52,9 +52,7 @@ class FakePromptTemplateRepository:
         return template
 
 
-def _props_with_id(template: PromptTemplate, new_id: str):
-    from ai_service.prompt.domain.model.prompt_template import PromptTemplateProps
-
+def _props_with_id(template: PromptTemplate, new_id: str) -> PromptTemplateProps:
     return PromptTemplateProps(
         id=new_id,
         name=template.name.get_value(),

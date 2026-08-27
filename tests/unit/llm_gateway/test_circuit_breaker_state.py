@@ -1,9 +1,9 @@
-from ai_service.llm_gateway.domain.model.circuit_breaker_state import (
+from ai_service.llm_gateway.circuit_breaker import (
     FAILURE_THRESHOLD,
     RESET_TIMEOUT_MS,
-    CircuitBreakerSnapshot,
     CircuitBreakerState,
 )
+from ai_service.llm_gateway.schemas import CircuitBreakerSnapshot
 
 
 def test_new_breaker_is_closed_and_callable() -> None:

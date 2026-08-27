@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from ai_service.config.settings import Settings
+from ai_service.core.config import Settings
 
 logger = logging.getLogger(__name__)
 

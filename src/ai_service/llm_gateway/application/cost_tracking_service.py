@@ -2,12 +2,10 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
-from ai_service.llm_gateway.domain.repository.llm_cost_log_repository import (
-    ILlmCostLogRepository,
-    LlmCostLog,
-)
-from ai_service.llm_gateway.domain.vo.token_usage import TokenUsage
+from ai_service.llm_gateway.repository import LlmCostLog
+from ai_service.llm_gateway.schemas import TokenUsage
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +34,7 @@ def parse_cost_table(raw: str | None) -> dict[str, ModelCostEntry]:
 
 
 class CostTrackingService:
-    def __init__(self, repo: ILlmCostLogRepository, cost_table: dict[str, ModelCostEntry]) -> None:
+    def __init__(self, repo: Any, cost_table: dict[str, ModelCostEntry]) -> None:
         self._repo = repo
         self._cost_table = cost_table
 

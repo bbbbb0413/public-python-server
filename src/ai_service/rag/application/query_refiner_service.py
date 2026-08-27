@@ -1,4 +1,4 @@
-from ai_service.rag.domain.vo.critique import Critique
+from ai_service.rag.schemas import Critique
 
 
 class QueryRefinerService:
@@ -12,3 +12,6 @@ class QueryRefinerService:
             return f"{original_question} (특히: {', '.join(missing)})"
 
         return original_question
+
+
+__all__ = ["QueryRefinerService"]

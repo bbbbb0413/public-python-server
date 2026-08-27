@@ -6,15 +6,13 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from ai_service.main import app
-from ai_service.rag.domain.model.conversation_session import (
+from ai_service.rag.dependencies import get_conversation_session_repository
+from ai_service.rag.repository import ConversationSessionRepository
+from ai_service.rag.schemas import (
     ConversationSession,
     RestoreProps,
     TurnRecord,
 )
-from ai_service.rag.domain.repository.conversation_session_repository import (
-    IConversationSessionRepository,
-)
-from ai_service.rag.presentation.deps import get_conversation_session_repository
 
 
 @pytest.fixture(autouse=True)
@@ -59,7 +57,7 @@ async def test_get_session_returns_turns_with_metadata() -> None:
     )
     session = ConversationSession.restore(props)
 
-    repo_mock = MagicMock(spec=IConversationSessionRepository)
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
     repo_mock.find_by_id = AsyncMock(return_value=session)
     app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
 
@@ -98,7 +96,7 @@ async def test_get_session_legacy_data_returns_none_metadata() -> None:
     )
     session = ConversationSession.restore(props)
 
-    repo_mock = MagicMock(spec=IConversationSessionRepository)
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
     repo_mock.find_by_id = AsyncMock(return_value=session)
     app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
 
@@ -116,7 +114,7 @@ async def test_get_session_legacy_data_returns_none_metadata() -> None:
 
 
 async def test_get_session_not_found_returns_null() -> None:
-    repo_mock = MagicMock(spec=IConversationSessionRepository)
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
     repo_mock.find_by_id = AsyncMock(return_value=None)
     app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
 

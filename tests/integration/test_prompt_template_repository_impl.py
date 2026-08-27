@@ -1,15 +1,13 @@
 import pytest
 
-from ai_service.prompt.domain.model.prompt_template import PromptTemplate
-from ai_service.prompt.infrastructure.persistence.prompt_template_repository_impl import (
-    PromptTemplateRepositoryImpl,
-)
+from ai_service.prompt.repository import PromptTemplateRepository
+from ai_service.prompt.schemas import PromptTemplate
 
 pytestmark = pytest.mark.integration
 
 
 async def test_persist_assigns_id(mongo_test_db) -> None:  # type: ignore[no-untyped-def]
-    repo = PromptTemplateRepositoryImpl(mongo_test_db)
+    repo = PromptTemplateRepository(mongo_test_db)
     template = PromptTemplate.create(name="rag-qa-system", content="c", variables=["context"])
 
     saved = await repo.persist(template)
@@ -18,7 +16,7 @@ async def test_persist_assigns_id(mongo_test_db) -> None:  # type: ignore[no-unt
 
 
 async def test_find_all_by_name_sorted_by_version_desc(mongo_test_db) -> None:  # type: ignore[no-untyped-def]
-    repo = PromptTemplateRepositoryImpl(mongo_test_db)
+    repo = PromptTemplateRepository(mongo_test_db)
     await repo.persist(PromptTemplate.create(name="p", content="v1", version=1))
     await repo.persist(PromptTemplate.create(name="p", content="v2", version=2))
 
@@ -28,7 +26,7 @@ async def test_find_all_by_name_sorted_by_version_desc(mongo_test_db) -> None:  
 
 
 async def test_activate_flow_deactivates_previous(mongo_test_db) -> None:  # type: ignore[no-untyped-def]
-    repo = PromptTemplateRepositoryImpl(mongo_test_db)
+    repo = PromptTemplateRepository(mongo_test_db)
     v1 = await repo.persist(PromptTemplate.create(name="p", content="v1", version=1))
     await repo.update(v1.activate())
 
@@ -46,7 +44,7 @@ async def test_activate_flow_deactivates_previous(mongo_test_db) -> None:  # typ
 
 
 async def test_find_active_for_user(mongo_test_db) -> None:  # type: ignore[no-untyped-def]
-    repo = PromptTemplateRepositoryImpl(mongo_test_db)
+    repo = PromptTemplateRepository(mongo_test_db)
     user_template = await repo.persist(
         PromptTemplate.create(name="p", content="for-user", version=1, user_id="user-1")
     )

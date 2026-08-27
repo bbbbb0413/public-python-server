@@ -3,9 +3,6 @@ import math
 import time
 from collections.abc import AsyncIterator
 
-from ai_service.llm_gateway.application.command.gateway_call_command import (
-    GatewayCallCommand,
-)
 from ai_service.llm_gateway.application.cost_tracking_service import (
     CostTrackingService,
     TrackParams,
@@ -16,7 +13,7 @@ from ai_service.llm_gateway.application.langsmith_tracing_service import (
     LlmRunParams,
 )
 from ai_service.llm_gateway.application.llm_routing_service import LlmRoutingService
-from ai_service.llm_gateway.domain.vo.token_usage import TokenUsage
+from ai_service.llm_gateway.schemas import GatewayCallCommand, TokenUsage
 
 APPROX_CHARS_PER_TOKEN = 4
 

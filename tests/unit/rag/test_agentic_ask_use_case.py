@@ -4,13 +4,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ai_service.knowledge.domain.port.vector_store_port import (
+from ai_service.knowledge.schemas import (
     SimilaritySearchResult,
     VectorDocumentMetadata,
 )
 from ai_service.llm_gateway.application.llm_gateway_service import LlmGatewayService
-from ai_service.prompt.application.get_active_prompt_use_case import GetActivePromptUseCase
-from ai_service.prompt.domain.model.prompt_template import PromptTemplate
+from ai_service.prompt.schemas import PromptTemplate
+from ai_service.prompt.service import PromptService
 from ai_service.rag.application.agentic_ask_use_case import AgenticAskUseCase
 from ai_service.rag.application.command.agentic_ask_command import AgenticAskCommand
 from ai_service.rag.application.critique_generator_service import CritiqueGeneratorService
@@ -21,8 +21,7 @@ from ai_service.rag.application.hybrid_search_use_case import (
     HybridSearchUseCase,
 )
 from ai_service.rag.application.query_refiner_service import QueryRefinerService
-from ai_service.rag.domain.vo.critique import Critique
-from ai_service.rag.domain.vo.iteration_budget import IterationBudget
+from ai_service.rag.schemas import Critique, IterationBudget
 
 
 def _make_prompt_template(name: str = "rag-qa-system") -> PromptTemplate:
@@ -54,7 +53,7 @@ def mock_llm_gateway() -> MagicMock:
 
 @pytest.fixture
 def mock_get_active_prompt() -> AsyncMock:
-    mock = AsyncMock(spec=GetActivePromptUseCase)
+    mock = AsyncMock(spec=PromptService)
     mock.execute.return_value = _make_prompt_template()
     return mock
 

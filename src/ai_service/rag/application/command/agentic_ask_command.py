@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from ai_service.rag.domain.vo.iteration_budget import IterationBudget
+from ai_service.rag.schemas import IterationBudget
 
 ProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 

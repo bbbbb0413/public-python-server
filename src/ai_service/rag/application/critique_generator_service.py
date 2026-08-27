@@ -5,12 +5,11 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, Field, SecretStr
 
-from ai_service.config.settings import Settings
-from ai_service.knowledge.domain.port.vector_store_port import SimilaritySearchResult
-from ai_service.llm_gateway.application.command.gateway_call_command import GatewayCallCommand
+from ai_service.core.config import Settings
+from ai_service.knowledge.schemas import SimilaritySearchResult
 from ai_service.llm_gateway.application.llm_gateway_service import LlmGatewayService
-from ai_service.llm_gateway.domain.model.llm_message import LlmMessage
-from ai_service.rag.domain.vo.critique import Critique
+from ai_service.llm_gateway.schemas import GatewayCallCommand, LlmMessage
+from ai_service.rag.schemas import Critique
 
 logger = logging.getLogger(__name__)
 

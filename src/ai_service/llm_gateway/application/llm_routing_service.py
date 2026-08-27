@@ -1,6 +1,6 @@
 import logging
 
-from ai_service.config.settings import Settings
+from ai_service.core.config import Settings
 
 logger = logging.getLogger(__name__)
 

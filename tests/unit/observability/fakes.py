@@ -1,4 +1,4 @@
-from ai_service.observability.domain.ragas_evaluation import RagasEvaluation
+from ai_service.observability.schemas import RagasEvaluation
 
 
 class FakeRagasEvaluationRepository:

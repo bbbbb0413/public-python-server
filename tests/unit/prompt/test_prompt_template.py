@@ -1,4 +1,4 @@
-from ai_service.prompt.domain.model.prompt_template import PromptTemplate
+from ai_service.prompt.schemas import PromptTemplate
 
 
 def test_create_sets_defaults() -> None:

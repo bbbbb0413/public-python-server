@@ -1,10 +1,11 @@
 from collections.abc import AsyncIterator
 from datetime import datetime
 
-from ai_service.llm_gateway.domain.model.circuit_breaker_state import CircuitBreakerSnapshot
-from ai_service.llm_gateway.domain.model.llm_message import LlmMessage, LlmOptions
-from ai_service.llm_gateway.domain.repository.llm_cost_log_repository import (
-    LlmCostLog,
+from ai_service.llm_gateway.repository import LlmCostLog
+from ai_service.llm_gateway.schemas import (
+    CircuitBreakerSnapshot,
+    LlmMessage,
+    LlmOptions,
     ModelCostSum,
 )
 
@@ -43,7 +44,9 @@ class FakeCircuitBreaker:
         self.failures.append(model)
 
     async def get_state(self, model: str) -> CircuitBreakerSnapshot:
-        return CircuitBreakerSnapshot(model=model, status="closed", failure_count=0, opened_at=None)
+        return CircuitBreakerSnapshot(
+            model=model, status="closed", failure_count=0, opened_at=None
+        )
 
 
 class FakeLlmCostLogRepository:

@@ -4,14 +4,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ai_service.config.settings import Settings
-from ai_service.knowledge.domain.port.vector_store_port import (
+from ai_service.core.config import Settings
+from ai_service.knowledge.schemas import (
     SimilaritySearchResult,
     VectorDocumentMetadata,
 )
 from ai_service.llm_gateway.application.llm_gateway_service import LlmGatewayService
-from ai_service.prompt.application.get_active_prompt_use_case import GetActivePromptUseCase
-from ai_service.prompt.domain.model.prompt_template import PromptTemplate
+from ai_service.prompt.schemas import PromptTemplate
+from ai_service.prompt.service import PromptService
 from ai_service.rag.application.ask_command import AskCommand
 from ai_service.rag.application.ask_use_case import AskUseCase
 from ai_service.rag.application.conversational_query_rewriter_service import (
@@ -23,11 +23,7 @@ from ai_service.rag.application.hybrid_search_use_case import (
     HybridSearchResult,
     HybridSearchUseCase,
 )
-from ai_service.rag.domain.port.llm_cache_port import ILlmCachePort
-from ai_service.rag.domain.port.semantic_cache_port import ISemanticCachePort
-from ai_service.rag.domain.repository.conversation_session_repository import (
-    IConversationSessionRepository,
-)
+from ai_service.rag.repository import ConversationSessionRepository
 
 
 def _make_prompt_template(name: str = "rag-qa-system") -> PromptTemplate:
@@ -59,14 +55,14 @@ def mock_hybrid_search() -> AsyncMock:
 
 @pytest.fixture
 def mock_get_active_prompt() -> AsyncMock:
-    mock = AsyncMock(spec=GetActivePromptUseCase)
+    mock = AsyncMock(spec=PromptService)
     mock.execute.return_value = _make_prompt_template()
     return mock
 
 
 @pytest.fixture
 def mock_llm_cache() -> AsyncMock:
-    mock = AsyncMock(spec=ILlmCachePort)
+    mock = AsyncMock()
     mock.get.return_value = None
     mock.set_with_ttl.return_value = None
     return mock
@@ -74,7 +70,7 @@ def mock_llm_cache() -> AsyncMock:
 
 @pytest.fixture
 def mock_semantic_cache() -> AsyncMock:
-    mock = AsyncMock(spec=ISemanticCachePort)
+    mock = AsyncMock()
     mock.find_similar.return_value = None
     mock.store.return_value = None
     return mock
@@ -82,8 +78,10 @@ def mock_semantic_cache() -> AsyncMock:
 
 @pytest.fixture
 def mock_session_repo() -> AsyncMock:
-    mock = AsyncMock(spec=IConversationSessionRepository)
+    mock = AsyncMock(spec=ConversationSessionRepository)
     mock.find_by_id.return_value = None
+    mock.persist.return_value = None
+    mock.update.return_value = None
     return mock
 
 

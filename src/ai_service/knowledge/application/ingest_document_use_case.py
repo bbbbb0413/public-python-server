@@ -2,24 +2,20 @@ import hashlib
 import io
 import logging
 import re
+from typing import Any
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
 
-from ai_service.knowledge.application.command.ingest_document_command import (
+from ai_service.knowledge.repository import DocumentRepository, QdrantVectorAdapter
+from ai_service.knowledge.schemas import (
+    Chunk,
+    Document,
     IngestDocumentCommand,
-)
-from ai_service.knowledge.domain.model.document import Document
-from ai_service.knowledge.domain.port.embedding_provider_port import IEmbeddingProvider
-from ai_service.knowledge.domain.port.vector_store_port import (
-    IVectorStorePort,
     VectorDocument,
     VectorDocumentMetadata,
 )
-from ai_service.knowledge.domain.repository.document_repository import IDocumentRepository
-from ai_service.knowledge.domain.vo.chunk import Chunk
-from ai_service.llm_gateway.domain.model.llm_message import LlmMessage
-from ai_service.llm_gateway.domain.port.llm_provider_port import ILlmProvider
+from ai_service.llm_gateway.schemas import LlmMessage
 from ai_service.rag.application.filter.rag_content_validator import RagContentValidator
 
 logger = logging.getLogger(__name__)
@@ -62,10 +58,10 @@ OFFSET_PROBE_LENGTH = 50
 class IngestDocumentUseCase:
     def __init__(
         self,
-        document_repo: IDocumentRepository,
-        vector_store: IVectorStorePort,
-        embedding_provider: IEmbeddingProvider,
-        llm_provider: ILlmProvider,
+        document_repo: DocumentRepository | Any,
+        vector_store: QdrantVectorAdapter | Any,
+        embedding_provider: Any,
+        llm_provider: Any,
         rag_validator: RagContentValidator,
         contextual_embeddings_enabled: bool = False,
     ) -> None:
@@ -101,7 +97,7 @@ class IngestDocumentUseCase:
 
         try:
             raw_text = self._extract_text(command.content, command.mime_type)
-            verdict = self._rag_validator.scan(raw_text)
+            verdict = self._rag_validator.inspect_input(raw_text)
             if not verdict.is_allowed():
                 raise ValueError(f"인제스트 차단: {verdict.get_reason()}")
 

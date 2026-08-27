@@ -1,16 +1,15 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from ai_service.rag.domain.model.conversation_session import (
+from ai_service.rag.repository import ConversationSessionRepository
+from ai_service.rag.schemas import (
     ConversationSession,
+    ConversationTurn,
     RestoreProps,
+    SessionDetailOut,
+    TurnOut,
     TurnRecord,
 )
-from ai_service.rag.domain.vo.conversation_turn import ConversationTurn
-from ai_service.rag.infrastructure.persistence.conversation_session_repository_impl import (
-    ConversationSessionRepositoryImpl,
-)
-from ai_service.rag.presentation.dto import SessionDetailOut, TurnOut
 
 
 def test_conversation_turn_with_metadata():
@@ -112,7 +111,7 @@ def test_repository_to_record_and_to_domain():
         updated_at=now,
     )
     session = ConversationSession.restore(props)
-    record = ConversationSessionRepositoryImpl._to_record(session)
+    record = ConversationSessionRepository._to_record(session)
 
     assert record["sessionId"] == "s-123"
     assert len(record["turns"]) == 2
@@ -122,7 +121,7 @@ def test_repository_to_record_and_to_domain():
     assert record["turns"][1]["confidence"] == 0.92
     assert record["turns"][1]["missing"] == ["항목1"]
 
-    restored = ConversationSessionRepositoryImpl._to_domain(record)
+    restored = ConversationSessionRepository._to_domain(record)
     assert restored.get_session_id() == "s-123"
     assert len(restored.turns) == 2
     assert restored.turns[1].sources == sources

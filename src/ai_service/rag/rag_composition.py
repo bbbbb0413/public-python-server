@@ -5,9 +5,9 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from qdrant_client import AsyncQdrantClient
 from redis.asyncio import Redis
 
-from ai_service.config.settings import Settings
+from ai_service.core.config import Settings
 from ai_service.knowledge.infrastructure.providers.embedding_factory import build_embedding_provider
-from ai_service.knowledge.infrastructure.vector.qdrant_vector_adapter import QdrantVectorAdapter
+from ai_service.knowledge.repository import QdrantVectorAdapter
 from ai_service.llm_gateway.application.cost_tracking_service import (
     CostTrackingService,
     parse_cost_table,
@@ -16,15 +16,11 @@ from ai_service.llm_gateway.application.fallback_service import FallbackService
 from ai_service.llm_gateway.application.langsmith_tracing_service import LangSmithTracingService
 from ai_service.llm_gateway.application.llm_gateway_service import LlmGatewayService
 from ai_service.llm_gateway.application.llm_routing_service import LlmRoutingService
-from ai_service.llm_gateway.infrastructure.circuit_breaker_adapter import CircuitBreakerAdapter
-from ai_service.llm_gateway.infrastructure.persistence.llm_cost_log_repository_impl import (
-    LlmCostLogRepositoryImpl,
-)
+from ai_service.llm_gateway.circuit_breaker import CircuitBreakerAdapter
 from ai_service.llm_gateway.infrastructure.providers.factory import build_llm_provider
-from ai_service.prompt.application.get_active_prompt_use_case import GetActivePromptUseCase
-from ai_service.prompt.infrastructure.persistence.prompt_template_repository_impl import (
-    PromptTemplateRepositoryImpl,
-)
+from ai_service.llm_gateway.repository import LlmCostLogRepository
+from ai_service.prompt.repository import PromptTemplateRepository
+from ai_service.prompt.service import PromptService
 from ai_service.rag.application.agentic_ask_use_case import AgenticAskUseCase
 from ai_service.rag.application.ask_use_case import AskUseCase
 from ai_service.rag.application.conversational_query_rewriter_service import (
@@ -42,19 +38,14 @@ from ai_service.rag.application.query_complexity_router import QueryComplexityRo
 from ai_service.rag.application.query_decomposer_service import QueryDecomposer
 from ai_service.rag.application.query_refiner_service import QueryRefinerService
 from ai_service.rag.application.rrf_fusion_service import RrfFusionService
-from ai_service.rag.domain.repository.conversation_session_repository import (
-    IConversationSessionRepository,
-)
-from ai_service.rag.domain.vo.iteration_budget import IterationBudget
 from ai_service.rag.infrastructure.cache.redis_llm_cache_adapter import RedisLlmCacheAdapter
 from ai_service.rag.infrastructure.cache.redis_semantic_cache_adapter import (
     RedisSemanticCacheAdapter,
 )
-from ai_service.rag.infrastructure.persistence.conversation_session_repository_impl import (
-    ConversationSessionRepositoryImpl,
-)
 from ai_service.rag.infrastructure.search.http_reranker_adapter import HttpRerankerAdapter
 from ai_service.rag.infrastructure.search.qdrant_text_search_adapter import QdrantTextSearchAdapter
+from ai_service.rag.repository import ConversationSessionRepository
+from ai_service.rag.schemas import IterationBudget
 
 LLM_CACHE_DB = 2
 
@@ -71,7 +62,7 @@ class RagComposition:
     get_session_use_case: GetSessionUseCase
     get_sessions_use_case: GetSessionsUseCase
     delete_session_use_case: DeleteSessionUseCase
-    session_repo: IConversationSessionRepository
+    session_repo: ConversationSessionRepository
     budget: IterationBudget
     confidence_threshold: float
     hyde_max_query_words: int
@@ -89,14 +80,14 @@ async def build_rag_composition(
 
     breaker = CircuitBreakerAdapter(redis_cb_client)
     fallback = FallbackService(llm_provider, breaker)
-    cost_repo = LlmCostLogRepositoryImpl(mongo_db)
+    cost_repo = LlmCostLogRepository(mongo_db)
     cost_tracking = CostTrackingService(cost_repo, parse_cost_table(settings.model_cost_table))
     routing = LlmRoutingService(settings)
     langsmith = LangSmithTracingService(settings)
     llm_gateway_service = LlmGatewayService(fallback, cost_tracking, routing, langsmith)
 
-    prompt_repo = PromptTemplateRepositoryImpl(mongo_db)
-    get_active_prompt = GetActivePromptUseCase(prompt_repo)
+    prompt_repo = PromptTemplateRepository(mongo_db)
+    prompt_service = PromptService(prompt_repo)
 
     qdrant_client = AsyncQdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key)
     vector_store = QdrantVectorAdapter(qdrant_client, settings.embedding_dimension)
@@ -120,10 +111,7 @@ async def build_rag_composition(
     )
 
     llm_cache_redis: Redis = Redis(
-        host=settings.redis_db_host,
-        port=settings.redis_db_port,
-        db=LLM_CACHE_DB,
-        decode_responses=True,
+        host=settings.redis_db_host, port=settings.redis_db_port, db=LLM_CACHE_DB
     )
     llm_cache = RedisLlmCacheAdapter(llm_cache_redis)
 
@@ -140,7 +128,7 @@ async def build_rag_composition(
             exc_info=True,
         )
 
-    session_repo = ConversationSessionRepositoryImpl(mongo_db)
+    session_repo = ConversationSessionRepository(mongo_db)
     await session_repo.ensure_indexes()
 
     rag_validator = RagContentValidator()
@@ -150,7 +138,7 @@ async def build_rag_composition(
     ask_use_case = AskUseCase(
         llm_gateway_service,
         hybrid_search,
-        get_active_prompt,
+        prompt_service,
         llm_cache,
         semantic_cache,
         settings,
@@ -165,7 +153,7 @@ async def build_rag_composition(
     agentic_ask_use_case = AgenticAskUseCase(
         hybrid_search,
         llm_gateway_service,
-        get_active_prompt,
+        prompt_service,
         critique_generator,
         query_refiner,
         rag_validator,

@@ -1,11 +1,18 @@
 import re
 import unicodedata
 
-from ai_service.knowledge.domain.port.vector_store_port import SimilaritySearchResult
-from ai_service.rag.domain.policy.injection_patterns import INJECTION_PATTERNS
-from ai_service.rag.domain.vo.guardrail_verdict import GuardrailVerdict
+from ai_service.knowledge.schemas import SimilaritySearchResult
+from ai_service.rag.schemas import GuardrailVerdict
 
-_ZERO_WIDTH_PATTERN = re.compile(r"[​-‍﻿]")
+_ZERO_WIDTH_PATTERN = re.compile(r"[\u200b-\u200d\ufeff]")
+
+INJECTION_PATTERNS = [
+    re.compile(r"ignore\s+(previous|all)\s+instructions?", re.IGNORECASE),
+    re.compile(r"system\s*:\s*", re.IGNORECASE),
+    re.compile(r"당신의\s*이전\s*지시(사항)?을?\s*무시(해|하세요|하십시오)?", re.IGNORECASE),
+    re.compile(r"시스템\s*프롬프트를?\s*(출력|알려줘|보여줘)", re.IGNORECASE),
+    re.compile(r"<\s*script[^>]*>", re.IGNORECASE),
+]
 
 
 class RagContentValidator:
@@ -27,14 +34,17 @@ class RagContentValidator:
             ]
             sanitized.append(
                 SimilaritySearchResult(
-                    text="\n".join(safe_lines), score=chunk.score, metadata=chunk.metadata
+                    text="\n".join(safe_lines),
+                    score=chunk.score,
+                    metadata=chunk.metadata,
                 )
             )
         return sanitized
 
-    def scan(self, raw_text: str) -> GuardrailVerdict:
-        return self.inspect_input(raw_text)
-
     @staticmethod
     def _clean_text(text: str) -> str:
-        return _ZERO_WIDTH_PATTERN.sub("", unicodedata.normalize("NFKC", text))
+        normalized = unicodedata.normalize("NFKC", text)
+        return _ZERO_WIDTH_PATTERN.sub("", normalized)
+
+
+__all__ = ["INJECTION_PATTERNS", "RagContentValidator"]

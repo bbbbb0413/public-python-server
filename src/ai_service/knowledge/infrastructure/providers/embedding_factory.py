@@ -1,11 +1,12 @@
+from typing import Any
+
 from pydantic import SecretStr
 
-from ai_service.config.settings import Settings
-from ai_service.knowledge.domain.port.embedding_provider_port import IEmbeddingProvider
+from ai_service.core.config import Settings
 
 
 class LangChainEmbeddingProvider:
-    """LangChain `Embeddings` 구현체를 감싸는 IEmbeddingProvider 어댑터."""
+    """LangChain `Embeddings` 구현체를 감싸는 어댑터."""
 
     def __init__(self, embeddings: object) -> None:
         self._embeddings = embeddings
@@ -17,7 +18,7 @@ class LangChainEmbeddingProvider:
         return result
 
 
-def build_embedding_provider(settings: Settings) -> IEmbeddingProvider:
+def build_embedding_provider(settings: Settings) -> Any:
     provider = settings.embedding_provider
 
     if provider == "ollama":
@@ -30,7 +31,7 @@ def build_embedding_provider(settings: Settings) -> IEmbeddingProvider:
         )
 
     if provider == "groq":
-        # TODO(Phase 2 후속): langchain-groq는 임베딩 모델을 제공하지 않는다.
+        # TODO: langchain-groq는 임베딩 모델을 제공하지 않는다.
         # NestJS 쪽 GroqEmbeddingProvider는 별도 REST 엔드포인트를 직접 호출하므로
         # 필요 시 동일한 방식으로 별도 구현해야 한다.
         raise NotImplementedError("Groq 임베딩 프로바이더는 아직 이식되지 않았습니다.")
@@ -51,3 +52,6 @@ def build_embedding_provider(settings: Settings) -> IEmbeddingProvider:
     model = settings.embedding_model or "text-embedding-3-small"
     api_key = SecretStr(settings.openai_api_key) if settings.openai_api_key else None
     return LangChainEmbeddingProvider(OpenAIEmbeddings(model=model, api_key=api_key))
+
+
+__all__ = ["LangChainEmbeddingProvider", "build_embedding_provider"]

@@ -8,11 +8,9 @@ from typing import Any
 from aiokafka import AIOKafkaConsumer
 from redis.asyncio import Redis
 
-from ai_service.knowledge.application.command.ingest_document_command import (
-    IngestDocumentCommand,
-)
+from ai_service.core.events import JobEventPublisher
 from ai_service.knowledge.knowledge_composition import KnowledgeComposition
-from ai_service.shared_kernel.messaging.job_event_publisher import JobEventPublisher
+from ai_service.knowledge.schemas import IngestDocumentCommand
 
 logger = logging.getLogger(__name__)
 

@@ -3,17 +3,16 @@ from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from ai_service.config.settings import Settings
-from ai_service.llm_gateway.domain.model.llm_message import LlmOptions
-from ai_service.llm_gateway.domain.port.llm_provider_port import ILlmProvider
+from ai_service.core.config import Settings
 from ai_service.llm_gateway.infrastructure.providers.langchain_provider import (
     LangChainLlmProvider,
 )
+from ai_service.llm_gateway.schemas import LlmOptions
 
 ChatModelFactory = Callable[[LlmOptions | None], BaseChatModel]
 
 
-def build_llm_provider(settings: Settings) -> ILlmProvider:
+def build_llm_provider(settings: Settings) -> LangChainLlmProvider:
     provider = settings.llm_provider
 
     if provider == "openai":

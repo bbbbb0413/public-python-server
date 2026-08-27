@@ -3,13 +3,13 @@ import json
 import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import Any
 
-from ai_service.config.settings import Settings
-from ai_service.knowledge.domain.port.vector_store_port import SimilaritySearchResult
-from ai_service.llm_gateway.application.command.gateway_call_command import GatewayCallCommand
+from ai_service.core.config import Settings
+from ai_service.knowledge.schemas import SimilaritySearchResult
 from ai_service.llm_gateway.application.llm_gateway_service import LlmGatewayService
-from ai_service.llm_gateway.domain.model.llm_message import LlmMessage
-from ai_service.prompt.application.get_active_prompt_use_case import GetActivePromptUseCase
+from ai_service.llm_gateway.schemas import GatewayCallCommand, LlmMessage
+from ai_service.prompt.service import PromptService
 from ai_service.rag.application.ask_command import AskCommand
 from ai_service.rag.application.command.hybrid_search_command import HybridSearchCommand
 from ai_service.rag.application.conversational_query_rewriter_service import (
@@ -18,12 +18,8 @@ from ai_service.rag.application.conversational_query_rewriter_service import (
 from ai_service.rag.application.filter.rag_content_validator import RagContentValidator
 from ai_service.rag.application.filter.secret_pii_scanner import SecretPiiScanner
 from ai_service.rag.application.hybrid_search_use_case import HybridSearchUseCase
-from ai_service.rag.domain.port.llm_cache_port import ILlmCachePort
-from ai_service.rag.domain.port.semantic_cache_port import ISemanticCachePort
-from ai_service.rag.domain.repository.conversation_session_repository import (
-    IConversationSessionRepository,
-)
-from ai_service.rag.domain.vo.similarity_threshold import SimilarityThreshold
+from ai_service.rag.repository import ConversationSessionRepository
+from ai_service.rag.schemas import SimilarityThreshold
 
 RAG_PROMPT_NAME = "rag-qa-system"
 DEFAULT_TENANT = "default"
@@ -34,14 +30,9 @@ RAG_SECURITY_POLICY_CLAUSE = (
 )
 
 _FILTERED_LINE_PATTERNS = [
-    re.compile(r"^#{1,3}\s*Step\s*\d+", re.IGNORECASE),
-    re.compile(r"^\*{0,2}\s*Step\s*\d+\**[:)]", re.IGNORECASE),
-    re.compile(r"^The final answer is", re.IGNORECASE),
-    re.compile(r"^In conclusion[,:\s]", re.IGNORECASE),
-    re.compile(r"^To summarize[,:\s]", re.IGNORECASE),
-    re.compile(r"^결론\s*[:\s]"),
-    re.compile(r"^최종\s*답변\s*[:\s]"),
-    re.compile(r"\$\\boxed\{"),
+    re.compile(r"^\s*##?\s*Step\s*\d+", re.IGNORECASE),
+    re.compile(r"^\s*Step\s*\d+\s*:", re.IGNORECASE),
+    re.compile(r"^\s*(The\s+final\s+answer\s+is|In\s+conclusion|To\s+summarize)\b", re.IGNORECASE),
     re.compile(r"\\boxed\{"),
 ]
 
@@ -55,13 +46,13 @@ class AskUseCase:
         self,
         llm_gateway: LlmGatewayService,
         hybrid_search: HybridSearchUseCase,
-        get_active_prompt: GetActivePromptUseCase,
-        llm_cache: ILlmCachePort,
-        semantic_cache: ISemanticCachePort,
+        get_active_prompt: PromptService,
+        llm_cache: Any,
+        semantic_cache: Any,
         settings: Settings,
         rag_validator: RagContentValidator,
         secret_pii_scanner: SecretPiiScanner,
-        session_repo: IConversationSessionRepository,
+        session_repo: ConversationSessionRepository | Any,
         query_rewriter: ConversationalQueryRewriter,
     ) -> None:
         self._llm_gateway = llm_gateway

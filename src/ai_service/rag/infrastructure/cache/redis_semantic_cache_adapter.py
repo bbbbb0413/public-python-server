@@ -2,11 +2,18 @@ import re
 import struct
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Any, cast
 
 from redis.asyncio import Redis
 
-from ai_service.rag.domain.port.semantic_cache_port import SemanticCacheHit
+
+@dataclass(frozen=True)
+class SemanticCacheHit:
+    answer: str
+    score: float
+    sources: list[dict[str, Any]] | None = None
+
 
 INDEX_NAME = "sem_cache_idx"
 KEY_PREFIX = "sem:cache:"

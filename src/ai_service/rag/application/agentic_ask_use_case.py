@@ -5,11 +5,10 @@ import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
-from ai_service.knowledge.domain.port.vector_store_port import SimilaritySearchResult
-from ai_service.llm_gateway.application.command.gateway_call_command import GatewayCallCommand
+from ai_service.knowledge.schemas import SimilaritySearchResult
 from ai_service.llm_gateway.application.llm_gateway_service import LlmGatewayService
-from ai_service.llm_gateway.domain.model.llm_message import LlmMessage
-from ai_service.prompt.application.get_active_prompt_use_case import GetActivePromptUseCase
+from ai_service.llm_gateway.schemas import GatewayCallCommand, LlmMessage
+from ai_service.prompt.service import PromptService
 from ai_service.rag.application.command.agentic_ask_command import (
     AgenticAskCommand,
     ProgressCallback,
@@ -38,7 +37,7 @@ class AgenticAskUseCase:
         self,
         hybrid_search: HybridSearchUseCase,
         llm_gateway: LlmGatewayService,
-        get_active_prompt: GetActivePromptUseCase,
+        get_active_prompt: PromptService,
         critique_generator: CritiqueGeneratorService,
         query_refiner: QueryRefinerService,
         rag_validator: RagContentValidator,

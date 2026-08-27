@@ -2,17 +2,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from ai_service.main import app
-from ai_service.prompt.application.activate_prompt_use_case import ActivatePromptUseCase
-from ai_service.prompt.application.create_prompt_use_case import CreatePromptUseCase
-from ai_service.prompt.application.get_active_prompt_use_case import (
-    GetActivePromptUseCase,
-)
-from ai_service.prompt.presentation.deps import (
-    get_activate_prompt_use_case,
-    get_active_prompt_use_case,
-    get_create_prompt_use_case,
-    get_prompt_template_repository,
-)
+from ai_service.prompt.dependencies import get_prompt_template_repository
 from tests.unit.prompt.fakes import FakePromptTemplateRepository
 
 
@@ -20,9 +10,6 @@ from tests.unit.prompt.fakes import FakePromptTemplateRepository
 def shared_repo():  # noqa: ANN201
     repo = FakePromptTemplateRepository()
     app.dependency_overrides[get_prompt_template_repository] = lambda: repo
-    app.dependency_overrides[get_create_prompt_use_case] = lambda: CreatePromptUseCase(repo)
-    app.dependency_overrides[get_activate_prompt_use_case] = lambda: ActivatePromptUseCase(repo)
-    app.dependency_overrides[get_active_prompt_use_case] = lambda: GetActivePromptUseCase(repo)
     yield repo
     app.dependency_overrides.clear()
 

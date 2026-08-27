@@ -2,7 +2,7 @@ import logging
 
 import httpx
 
-from ai_service.knowledge.domain.port.vector_store_port import SimilaritySearchResult
+from ai_service.knowledge.schemas import SimilaritySearchResult
 
 logger = logging.getLogger(__name__)
 

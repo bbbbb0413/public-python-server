@@ -1,6 +1,6 @@
 import pytest
 
-from ai_service.llm_gateway.domain.vo.model_route import ModelRoute
+from ai_service.llm_gateway.schemas import ModelRoute
 
 
 def test_of_creates_valid_model_route() -> None:

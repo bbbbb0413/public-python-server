@@ -34,4 +34,7 @@ class GoogleEmbeddingProvider:
             contents=text,
             config=self._config,
         )
-        return list(response.embeddings[0].values)
+        if response.embeddings and response.embeddings[0].values:
+            return list(response.embeddings[0].values)
+        return []
+

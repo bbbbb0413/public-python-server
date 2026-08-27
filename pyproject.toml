@@ -57,7 +57,7 @@ select = ["E", "F", "I", "UP", "B"]
 ignore = ["E203"]
 
 [tool.ruff.lint.per-file-ignores]
-"src/ai_service/prompt/application/get_active_prompt_use_case.py" = ["E501"]
+"src/ai_service/prompt/service.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"

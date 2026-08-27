@@ -1,4 +1,4 @@
-from ai_service.knowledge.domain.port.vector_store_port import SimilaritySearchResult
+from ai_service.knowledge.schemas import SimilaritySearchResult
 
 DEFAULT_K = 60
 

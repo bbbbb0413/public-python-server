@@ -1,6 +1,6 @@
 from typing import Any
 
-from ai_service.config.settings import Settings
+from ai_service.core.config import Settings
 from ai_service.llm_gateway.application.langsmith_tracing_service import (
     LangSmithTracingService,
     LlmRunParams,

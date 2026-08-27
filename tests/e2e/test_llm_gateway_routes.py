@@ -1,12 +1,12 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from ai_service.config.settings import Settings, get_settings
-from ai_service.llm_gateway.domain.repository.llm_cost_log_repository import ModelCostSum
-from ai_service.llm_gateway.presentation.deps import (
+from ai_service.core.config import Settings, get_settings
+from ai_service.llm_gateway.dependencies import (
     get_circuit_breaker,
     get_llm_cost_log_repository,
 )
+from ai_service.llm_gateway.schemas import ModelCostSum
 from ai_service.main import app
 from tests.unit.llm_gateway.fakes import FakeCircuitBreaker, FakeLlmCostLogRepository
 
