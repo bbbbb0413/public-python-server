@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     claude_model: str | None = None
     google_api_key: str | None = None
     google_model: str | None = None
+    # text-embedding-004는 2026-01-14 폐기됨. gemini-embedding-001 사용 (GA, 무료 티어 제공)
+    google_embedding_model: str = "gemini-embedding-001"
     groq_api_key: str | None = None
     groq_model: str | None = None
 

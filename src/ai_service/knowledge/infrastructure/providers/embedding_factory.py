@@ -35,6 +35,17 @@ def build_embedding_provider(settings: Settings) -> IEmbeddingProvider:
         # 필요 시 동일한 방식으로 별도 구현해야 한다.
         raise NotImplementedError("Groq 임베딩 프로바이더는 아직 이식되지 않았습니다.")
 
+    if provider == "gemini":
+        from ai_service.knowledge.infrastructure.providers.google_embedding_provider import (
+            GoogleEmbeddingProvider,
+        )
+
+        return GoogleEmbeddingProvider(
+            api_key=settings.google_api_key,
+            model=settings.google_embedding_model,
+            output_dimensionality=settings.embedding_dimension,
+        )
+
     from langchain_openai import OpenAIEmbeddings
 
     model = settings.embedding_model or "text-embedding-3-small"
