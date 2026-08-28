@@ -136,6 +136,12 @@ class AskRequestedConsumer:
                 )
             )
         else:
+            # 에이전틱 경로와 달리 단순 질문 경로는 자체 진행 이벤트가 없었다.
+            # 검색(리트리버 호출)이 끝나기 전까지 아무 신호도 없어 프론트가
+            # "검색 중" 표시를 못 하던 문제를 여기서 최소한으로 보강한다.
+            await self._publisher.publish_progress(
+                message.job_id, {"iteration": 0, "phase": "searching"}
+            )
             stream = composition.ask_use_case.execute(
                 AskCommand(
                     question=message.question,
@@ -149,6 +155,9 @@ class AskRequestedConsumer:
 
         collected: list[str] = []
         sources: list[dict[str, Any]] | None = None
+        # 에이전틱 경로는 자체 on_progress로 searching/generating/critiquing/refining을
+        # 이미 관리하므로 여기서는 단순 경로에서만 "generating" 전환을 한 번 알린다.
+        generating_announced = complexity == "complex"
         async for chunk in stream:
             is_cancelled = await self._redis.get(f"job:{message.job_id}:cancelled")
             if is_cancelled:
@@ -158,7 +167,17 @@ class AskRequestedConsumer:
             if chunk.startswith(_SOURCES_PREFIX):
                 sources = json.loads(chunk[len(_SOURCES_PREFIX) :])
                 await self._publisher.publish_sources(message.job_id, sources)
+                if not generating_announced:
+                    await self._publisher.publish_progress(
+                        message.job_id, {"iteration": 0, "phase": "generating"}
+                    )
+                    generating_announced = True
             else:
+                if not generating_announced:
+                    await self._publisher.publish_progress(
+                        message.job_id, {"iteration": 0, "phase": "generating"}
+                    )
+                    generating_announced = True
                 safe = composition.secret_pii_scanner.mask(chunk)
                 collected.append(safe)
                 await self._publisher.publish_token(message.job_id, safe)

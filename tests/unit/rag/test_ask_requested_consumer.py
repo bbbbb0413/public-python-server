@@ -113,7 +113,7 @@ async def test_ask_requested_consumer_complex_publishes_progress():
 
 
 @pytest.mark.asyncio
-async def test_ask_requested_consumer_simple_does_not_publish_progress():
+async def test_ask_requested_consumer_simple_publishes_searching_and_generating_progress():
     redis_mock = MagicMock(spec=Redis)
     redis_mock.xadd = AsyncMock()
     redis_mock.get = AsyncMock(return_value=None)
@@ -161,13 +161,21 @@ async def test_ask_requested_consumer_simple_does_not_publish_progress():
     )
     await consumer._process(message)
 
-    # redis xadd 호출 확인: progress 이벤트가 전혀 발행되지 않아야 함
+    # redis xadd 호출 확인: 단순 경로도 searching → generating 진행 이벤트를 발행해야 함
     progress_calls = [
         call
         for call in redis_mock.xadd.await_args_list
         if call.args[1].get("type") == "progress"
     ]
-    assert len(progress_calls) == 0
+    assert len(progress_calls) == 2
+    assert json.loads(progress_calls[0].args[1]["data"]) == {
+        "iteration": 0,
+        "phase": "searching",
+    }
+    assert json.loads(progress_calls[1].args[1]["data"]) == {
+        "iteration": 0,
+        "phase": "generating",
+    }
 
     # redis xadd 호출 확인: done 이벤트가 메타데이터 없이 발행되었는지
     done_calls = [
