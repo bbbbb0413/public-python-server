@@ -95,6 +95,12 @@ class IngestDocumentUseCase:
         document_id = document.id
         assert document_id is not None
 
+        # 처리 성공/실패와 무관하게 사용자가 올린 원본은 그대로 보존한다
+        # (근거 확인 화면에서 "원문 보기"로 열람하거나, 나중에 재시도할 때 쓴다).
+        await self._document_repo.save_original_file(
+            document_id, command.content, command.file_name, command.mime_type
+        )
+
         try:
             raw_text = self._extract_text(command.content, command.mime_type)
             verdict = self._rag_validator.inspect_input(raw_text)

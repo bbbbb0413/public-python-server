@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from ai_service.core.security import require_admin_api_key
 from ai_service.knowledge.dependencies import DocumentRepositoryDep, VectorStoreDep
@@ -27,6 +27,19 @@ async def get_document(document_id: str, repo: DocumentRepositoryDep) -> Documen
 async def list_chunks(document_id: str, vector_store: VectorStoreDep) -> list[ChunkOut]:
     chunks = await vector_store.find_chunks_by_document_id(document_id)
     return [ChunkOut(chunkIndex=c.metadata.chunk_index, text=c.text) for c in chunks]
+
+
+@router.get("/{document_id}/file")
+async def get_document_file(document_id: str, repo: DocumentRepositoryDep) -> Response:
+    result = await repo.get_original_file(document_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"원본 파일을 찾을 수 없습니다: {document_id}")
+    content, file_name, mime_type = result
+    return Response(
+        content=content,
+        media_type=mime_type,
+        headers={"Content-Disposition": f'inline; filename="{file_name}"'},
+    )
 
 
 @router.delete("/{document_id}", status_code=204)

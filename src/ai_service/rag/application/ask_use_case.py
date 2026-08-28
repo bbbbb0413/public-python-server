@@ -100,6 +100,7 @@ class AskUseCase:
                     "chunkIndex": c.metadata.chunk_index,
                     "documentId": c.metadata.document_id,
                     "snippet": self._format_snippet(c.text),
+                    "score": c.score,
                 }
                 for c in chunks
             ]
