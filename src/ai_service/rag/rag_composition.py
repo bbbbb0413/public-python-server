@@ -111,7 +111,10 @@ async def build_rag_composition(
     )
 
     llm_cache_redis: Redis = Redis(
-        host=settings.redis_db_host, port=settings.redis_db_port, db=LLM_CACHE_DB
+        host=settings.redis_db_host,
+        port=settings.redis_db_port,
+        db=LLM_CACHE_DB,
+        decode_responses=True,
     )
     llm_cache = RedisLlmCacheAdapter(llm_cache_redis)
 
