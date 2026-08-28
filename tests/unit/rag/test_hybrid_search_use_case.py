@@ -62,6 +62,7 @@ def mock_hyde_service() -> AsyncMock:
 @pytest.fixture
 def mock_query_decomposer() -> AsyncMock:
     mock = AsyncMock(spec=QueryDecomposer)
+    mock.should_decompose.return_value = False
     mock.decompose.return_value = []
     return mock
 
@@ -113,6 +114,82 @@ class TestHybridSearchUseCase:
         mock_vector_store.find_similar.assert_awaited_once()
         mock_lexical_search.search_by_text.assert_awaited_once()
         assert len(result.chunks) > 0
+
+    async def test_use_hyde가_false이면_HyDE_생성과_추가_벡터검색을_건너뛴다(
+        self,
+        mock_vector_store: AsyncMock,
+        mock_lexical_search: AsyncMock,
+        mock_embedding_provider: AsyncMock,
+        mock_reranker: AsyncMock,
+        mock_hyde_service: AsyncMock,
+        mock_query_decomposer: AsyncMock,
+    ) -> None:
+        use_case = _make_use_case(
+            mock_vector_store,
+            mock_lexical_search,
+            mock_embedding_provider,
+            mock_reranker,
+            mock_hyde_service,
+            mock_query_decomposer,
+        )
+
+        await use_case.execute(HybridSearchCommand(question="질문입니다", use_hyde=False))
+
+        mock_hyde_service.generate_hypothetical_document.assert_not_called()
+        assert mock_vector_store.find_similar.await_count == 1
+        assert mock_embedding_provider.embed.await_count == 1
+
+    async def test_복합_질문이_아니면_쿼리_분해를_건너뛴다(
+        self,
+        mock_vector_store: AsyncMock,
+        mock_lexical_search: AsyncMock,
+        mock_embedding_provider: AsyncMock,
+        mock_reranker: AsyncMock,
+        mock_hyde_service: AsyncMock,
+        mock_query_decomposer: AsyncMock,
+    ) -> None:
+        mock_query_decomposer.should_decompose.return_value = False
+        use_case = _make_use_case(
+            mock_vector_store,
+            mock_lexical_search,
+            mock_embedding_provider,
+            mock_reranker,
+            mock_hyde_service,
+            mock_query_decomposer,
+        )
+
+        await use_case.execute(HybridSearchCommand(question="단순 질문입니다"))
+
+        mock_query_decomposer.decompose.assert_not_called()
+        assert mock_lexical_search.search_by_text.await_count == 1
+
+    async def test_복합_질문이면_분해된_서브쿼리마다_추가_키워드검색을_수행한다(
+        self,
+        mock_vector_store: AsyncMock,
+        mock_lexical_search: AsyncMock,
+        mock_embedding_provider: AsyncMock,
+        mock_reranker: AsyncMock,
+        mock_hyde_service: AsyncMock,
+        mock_query_decomposer: AsyncMock,
+    ) -> None:
+        mock_query_decomposer.should_decompose.return_value = True
+        mock_query_decomposer.decompose.return_value = ["서브 질문 1", "서브 질문 2"]
+        use_case = _make_use_case(
+            mock_vector_store,
+            mock_lexical_search,
+            mock_embedding_provider,
+            mock_reranker,
+            mock_hyde_service,
+            mock_query_decomposer,
+        )
+
+        await use_case.execute(
+            HybridSearchCommand(question="이거 그리고 저거는 각각 어떻게 되나요?")
+        )
+
+        mock_query_decomposer.decompose.assert_awaited_once()
+        # 원 질문 1회 + 서브쿼리 2회 = 총 3회 키워드 검색
+        assert mock_lexical_search.search_by_text.await_count == 3
 
     async def test_HyDE_가설문서가_생성되면_임계값과_함께_추가_벡터검색을_호출한다(
         self,
