@@ -7,6 +7,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from redis.asyncio import Redis
 
 from ai_service.core.config import get_settings
+from ai_service.feedback.router import router as feedback_router
 from ai_service.knowledge.infrastructure.messaging.ingest_requested_consumer import (
     IngestRequestedConsumer,
 )
@@ -79,6 +80,7 @@ app.include_router(prompt_router)
 app.include_router(observability_router)
 app.include_router(rag_router)
 app.include_router(knowledge_router)
+app.include_router(feedback_router)
 
 
 @app.get("/health")
