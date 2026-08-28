@@ -20,7 +20,7 @@ class QdrantTextSearchAdapter:
         self._client = client
         self._collection_name = collection_name
 
-    async def search(self, query: str, top_k: int) -> list[SimilaritySearchResult]:
+    async def search_by_text(self, query: str, top_k: int) -> list[SimilaritySearchResult]:
         records, _ = await self._client.scroll(
             collection_name=self._collection_name,
             scroll_filter=Filter(must=[FieldCondition(key="text", match=MatchText(text=query))]),

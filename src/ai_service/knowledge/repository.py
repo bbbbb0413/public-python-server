@@ -210,14 +210,15 @@ class QdrantVectorAdapter:
         ]
         await self._client.upsert(collection_name=self._collection_name, points=points)
 
-    async def similarity_search(
-        self, query_embedding: list[float], top_k: int
+    async def find_similar(
+        self, query_embedding: list[float], top_k: int, threshold: float | None = None
     ) -> list[SimilaritySearchResult]:
         response = await self._client.query_points(
             collection_name=self._collection_name,
             query=query_embedding,
             limit=top_k,
             with_payload=True,
+            score_threshold=threshold,
         )
         return [
             SimilaritySearchResult(
