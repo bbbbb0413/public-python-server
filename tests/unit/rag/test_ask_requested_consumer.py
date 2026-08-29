@@ -250,6 +250,8 @@ async def test_ask_requested_consumer_appends_sources_to_session():
     assert updated_session.turns[1].role == "assistant"
     assert updated_session.turns[1].content == "답변입니다."
     assert updated_session.turns[1].sources == sources_data
+    assert updated_session.turns[1].confidence is None
+    assert updated_session.turns[1].missing is None
 
 
 @pytest.mark.asyncio
@@ -482,6 +484,81 @@ async def test_ask_requested_consumer_cancelled_before_first_chunk():
         if call.args[1].get("type") == "done"
     ]
     assert len(done_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_complex_persists_confidence_and_missing_to_session():
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+
+    agentic_use_case_mock = MagicMock(spec=AgenticAskUseCase)
+
+    async def fake_agentic_execute(command) -> AsyncIterator[str]:
+        if command.on_progress:
+            await command.on_progress(
+                {"iteration": 1, "phase": "searching", "confidence": 0.0, "missing": []}
+            )
+            await command.on_progress(
+                {"iteration": 1, "phase": "generating", "confidence": 0.0, "missing": []}
+            )
+            await command.on_progress(
+                {
+                    "iteration": 1,
+                    "phase": "critiquing",
+                    "confidence": 0.85,
+                    "missing": ["추가 설명"],
+                }
+            )
+        yield "에이전틱 답변입니다."
+
+    agentic_use_case_mock.execute.side_effect = fake_agentic_execute
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "complex"
+
+    validator_mock = MagicMock(spec=RagContentValidator)
+    validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
+
+    initial_session = ConversationSession.create("user-1", "복잡한 에이전틱 질문")
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
+    session_repo_mock.persist = AsyncMock(return_value=initial_session)
+    session_repo_mock.update = AsyncMock(return_value=initial_session)
+
+    composition = RagComposition(
+        ask_use_case=MagicMock(spec=AskUseCase),
+        agentic_ask_use_case=agentic_use_case_mock,
+        query_complexity_router=router_mock,
+        rag_validator=validator_mock,
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(3, 1000, 5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    message = AskRequestedMessage(
+        job_id="test-job-session-confidence",
+        user_id="user-1",
+        question="복잡한 에이전틱 질문",
+        session_id=initial_session.get_session_id(),
+    )
+    await consumer._process(message)
+
+    session_repo_mock.update.assert_awaited_once()
+    updated_session = session_repo_mock.update.await_args[0][0]
+    assert len(updated_session.turns) == 2
+    assert updated_session.turns[1].role == "assistant"
+    assert updated_session.turns[1].content == "에이전틱 답변입니다."
+    assert updated_session.turns[1].confidence == 0.85
+    assert updated_session.turns[1].missing == ["추가 설명"]
 
 
 
