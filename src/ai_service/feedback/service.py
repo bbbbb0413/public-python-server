@@ -44,9 +44,12 @@ class FeedbackService:
         화면에서 버튼을 숨기는 것으로는 부족하다. 세션 id 는 추측할 수 없는
         값이지만 한 번 새어 나가면 그것만으로 남의 대화에 평가를 남길 수 있다.
         없는 세션과 남의 세션을 같은 404 로 답해 존재 여부를 흘리지 않는다.
+
+        소유권 조건은 리포지토리 쿼리가 건다 — 읽어 온 뒤 여기서 비교하면
+        호출부가 늘 때마다 빠뜨릴 수 있다.
         """
-        session = await self._session_repo.find_by_id(session_id)
-        if session is None or session.get_user_id() != user_id:
+        session = await self._session_repo.find_by_id_for_user(session_id, user_id)
+        if session is None:
             raise FeedbackError("대상 세션을 찾을 수 없습니다.", 404)
         return session
 

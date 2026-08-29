@@ -26,7 +26,25 @@ class ConversationSessionRepository:
         )
 
     async def find_by_id(self, session_id: str) -> ConversationSession | None:
+        """소유자를 가리지 않고 세션을 읽는다.
+
+        **HTTP 경로에서 쓰지 않는다.** 요청한 사람이 누구인지 모르는 자리 —
+        Kafka 소비자가 자기가 만든 잡의 세션을 이어 쓰는 경우 — 에만 쓴다.
+        사용자 요청을 처리하는 곳은 `find_by_id_for_user` 를 쓴다.
+        """
         record = await self._collection.find_one({"sessionId": session_id})
+        return self._to_domain(record) if record else None
+
+    async def find_by_id_for_user(
+        self, session_id: str, user_id: str
+    ) -> ConversationSession | None:
+        """소유자의 세션만 읽는다. 남의 것이면 없는 것과 같이 취급한다.
+
+        소유권을 쿼리 조건에 넣는 이유는, 읽어 온 뒤 서비스에서 비교하는 방식이
+        호출부가 늘 때마다 빠질 수 있기 때문이다. 조건이 여기 있으면 빠뜨릴
+        자리가 없다.
+        """
+        record = await self._collection.find_one({"sessionId": session_id, "userId": user_id})
         return self._to_domain(record) if record else None
 
     async def find_by_user_id(
@@ -51,7 +69,20 @@ class ConversationSessionRepository:
         return session
 
     async def delete_by_id(self, session_id: str) -> None:
+        """소유자를 가리지 않고 지운다. HTTP 경로에서 쓰지 않는다."""
         await self._collection.delete_one({"sessionId": session_id})
+
+    async def delete_by_id_for_user(self, session_id: str, user_id: str) -> bool:
+        """소유자의 세션만 지운다.
+
+        Returns:
+            실제로 지웠는지. 없는 세션과 남의 세션 모두 False 다 — 호출부가
+            둘을 같은 응답으로 답해 세션 존재 여부를 흘리지 않게 한다.
+        """
+        result = await self._collection.delete_one(
+            {"sessionId": session_id, "userId": user_id}
+        )
+        return result.deleted_count > 0
 
     @staticmethod
     def _to_domain(record: dict[str, Any]) -> ConversationSession:

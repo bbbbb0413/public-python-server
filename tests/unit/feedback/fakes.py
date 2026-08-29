@@ -66,3 +66,18 @@ class FakeSessionRepository:
 
     async def find_by_id(self, session_id: str) -> ConversationSession | None:
         return self.storage.get(session_id)
+
+    async def find_by_id_for_user(
+        self, session_id: str, user_id: str
+    ) -> ConversationSession | None:
+        session = self.storage.get(session_id)
+        if session is None or session.get_user_id() != user_id:
+            return None
+        return session
+
+    async def delete_by_id_for_user(self, session_id: str, user_id: str) -> bool:
+        session = self.storage.get(session_id)
+        if session is None or session.get_user_id() != user_id:
+            return False
+        del self.storage[session_id]
+        return True
