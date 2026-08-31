@@ -1,17 +1,23 @@
 FROM python:3.11-slim AS base
 
 RUN useradd --create-home --shell /bin/bash appuser
-RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 RUN chown -R appuser:appuser /app
 
 FROM base AS build
+RUN pip install --no-cache-dir uv
+
 USER appuser
 WORKDIR /app
 
-COPY --chown=appuser:appuser . .
-RUN uv venv && uv pip install -e .
+COPY --chown=appuser:appuser pyproject.toml uv.lock ./
+RUN --mount=type=cache,uid=1000,target=/home/appuser/.cache/uv \
+    uv sync --locked --no-install-project --no-dev
+
+COPY --chown=appuser:appuser src ./src
+RUN --mount=type=cache,uid=1000,target=/home/appuser/.cache/uv \
+    uv sync --locked --no-dev
 
 FROM base
 USER appuser
