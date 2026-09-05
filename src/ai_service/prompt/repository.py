@@ -41,8 +41,18 @@ class PromptTemplateRepository:
         record = await self._collection.find_one({"name": name, "version": version})
         return self._to_domain(record) if record else None
 
-    async def find_all_by_name(self, name: str) -> list[PromptTemplate]:
-        cursor = self._collection.find({"name": name}).sort("version", -1)
+    async def find_all_by_name(
+        self, name: str, user_id: str | None = None
+    ) -> list[PromptTemplate]:
+        query: dict[str, Any]
+        if user_id is not None:
+            query = {
+                "name": name,
+                "$or": [{"userId": user_id}, {"userId": {"$exists": False}}],
+            }
+        else:
+            query = {"name": name, "userId": {"$exists": False}}
+        cursor = self._collection.find(query).sort("version", -1)
         records = await cursor.to_list(length=None)
         return [self._to_domain(r) for r in records]
 

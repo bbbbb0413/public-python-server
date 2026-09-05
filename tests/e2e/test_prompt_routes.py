@@ -68,3 +68,75 @@ async def test_create_rejects_invalid_name(shared_repo) -> None:  # type: ignore
         )
 
     assert response.status_code == 422
+
+
+async def test_list_versions_user_isolation(shared_repo) -> None:  # type: ignore[no-untyped-def]
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post(
+            "/prompts",
+            json={"name": "rag-qa-system", "content": "global-v1", "variables": ["context"]},
+        )
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "userA-v2",
+                "variables": ["context"],
+                "userId": "user-A",
+            },
+        )
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "userB-v3",
+                "variables": ["context"],
+                "userId": "user-B",
+            },
+        )
+
+        # 1. user-A should see global-v1 + userA-v2, but NOT userB-v3
+        resp_a = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
+        assert resp_a.status_code == 200
+        data_a = resp_a.json()
+        versions_a = [item["version"] for item in data_a]
+        assert set(versions_a) == {1, 2}
+
+        # 2. No userId query param should return only global-v1
+        resp_anon = await client.get("/prompts/rag-qa-system")
+        assert resp_anon.status_code == 200
+        data_anon = resp_anon.json()
+        versions_anon = [item["version"] for item in data_anon]
+        assert versions_anon == [1]
+
+
+async def test_list_versions_when_no_global_prompt_exists(shared_repo) -> None:  # type: ignore[no-untyped-def]
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "userA-v1",
+                "variables": ["context"],
+                "userId": "user-A",
+            },
+        )
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "userB-v2",
+                "variables": ["context"],
+                "userId": "user-B",
+            },
+        )
+
+        resp = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["version"] == 1
+        assert data[0]["userId"] == "user-A"
+

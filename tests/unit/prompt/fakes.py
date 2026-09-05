@@ -3,52 +3,67 @@ from ai_service.prompt.schemas import PromptTemplate, PromptTemplateProps
 
 class FakePromptTemplateRepository:
     def __init__(self) -> None:
-        self.storage: dict[tuple[str, int], PromptTemplate] = {}
+        self.storage: dict[str, PromptTemplate] = {}
         self._next_id = 1
 
     async def persist(self, template: PromptTemplate) -> PromptTemplate:
-        stored = PromptTemplate.restore(_props_with_id(template, str(self._next_id)))
+        template_id = template.id or str(self._next_id)
+        stored = PromptTemplate.restore(_props_with_id(template, template_id))
         self._next_id += 1
-        self.storage[(stored.name.get_value(), stored.version)] = stored
+        self.storage[template_id] = stored
         return stored
 
     async def find_by_name_and_version(self, name: str, version: int) -> PromptTemplate | None:
-        return self.storage.get((name, version))
+        for t in self.storage.values():
+            if t.name.get_value() == name and t.version == version:
+                return t
+        return None
 
-    async def find_all_by_name(self, name: str) -> list[PromptTemplate]:
-        return sorted(
-            (t for (n, _), t in self.storage.items() if n == name),
-            key=lambda t: t.version,
-            reverse=True,
-        )
+    async def find_all_by_name(
+        self, name: str, user_id: str | None = None
+    ) -> list[PromptTemplate]:
+        if user_id is not None:
+            matches = [
+                t
+                for t in self.storage.values()
+                if t.name.get_value() == name and (t.user_id == user_id or t.user_id is None)
+            ]
+        else:
+            matches = [
+                t
+                for t in self.storage.values()
+                if t.name.get_value() == name and t.user_id is None
+            ]
+        return sorted(matches, key=lambda t: t.version, reverse=True)
 
     async def find_active(self, name: str) -> PromptTemplate | None:
-        for (n, _), t in self.storage.items():
-            if n == name and t.user_id is None and t.is_active:
+        for t in self.storage.values():
+            if t.name.get_value() == name and t.user_id is None and t.is_active:
                 return t
         return None
 
     async def find_active_for_user(self, name: str, user_id: str) -> PromptTemplate | None:
-        for (n, _), t in self.storage.items():
-            if n == name and t.user_id == user_id and t.is_active:
+        for t in self.storage.values():
+            if t.name.get_value() == name and t.user_id == user_id and t.is_active:
                 return t
         return None
 
     async def deactivate_all_by_name(self, name: str) -> None:
-        for key, t in list(self.storage.items()):
-            if key[0] == name and t.user_id is None and t.is_active:
-                self.storage[key] = t.deactivate()
+        for template_id, t in list(self.storage.items()):
+            if t.name.get_value() == name and t.user_id is None and t.is_active:
+                self.storage[template_id] = t.deactivate()
 
     async def deactivate_all_by_name_for_user(self, name: str, user_id: str) -> None:
-        for key, t in list(self.storage.items()):
-            if key[0] == name and t.user_id == user_id and t.is_active:
-                self.storage[key] = t.deactivate()
+        for template_id, t in list(self.storage.items()):
+            if t.name.get_value() == name and t.user_id == user_id and t.is_active:
+                self.storage[template_id] = t.deactivate()
 
     async def deactivate_active_for_user(self, name: str, user_id: str) -> None:
         await self.deactivate_all_by_name_for_user(name, user_id)
 
     async def update(self, template: PromptTemplate) -> PromptTemplate:
-        self.storage[(template.name.get_value(), template.version)] = template
+        template_id = template.id or str(self._next_id)
+        self.storage[template_id] = template
         return template
 
 
