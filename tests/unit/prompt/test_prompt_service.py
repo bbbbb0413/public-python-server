@@ -158,6 +158,22 @@ async def test_list_versions_with_user_id_returns_user_and_global_templates_only
     assert 3 not in versions  # user-B
 
 
+async def test_list_versions_with_user_id_when_no_global_prompt_exists() -> None:
+    repo = FakePromptTemplateRepository()
+    service = PromptService(repo)
+    await service.create_prompt(
+        CreatePromptIn(name="rag-qa-system", content="userA-v1", userId="user-A")
+    )
+    await service.create_prompt(
+        CreatePromptIn(name="rag-qa-system", content="userB-v2", userId="user-B")
+    )
+
+    templates = await service.list_versions("rag-qa-system", user_id="user-A")
+    assert len(templates) == 1
+    assert templates[0].version == 1
+    assert templates[0].user_id == "user-A"
+
+
 async def test_list_versions_without_user_id_returns_only_global_templates() -> None:
     repo = FakePromptTemplateRepository()
     service = PromptService(repo)
@@ -173,4 +189,5 @@ async def test_list_versions_without_user_id_returns_only_global_templates() -> 
     assert len(templates) == 1
     assert templates[0].version == 1
     assert templates[0].user_id is None
+
 
