@@ -56,3 +56,23 @@ async def test_find_active_for_user(mongo_test_db) -> None:  # type: ignore[no-u
 
     not_found = await repo.find_active_for_user("p", "user-2")
     assert not_found is None
+
+
+async def test_find_all_by_name_user_isolation(mongo_test_db) -> None:  # type: ignore[no-untyped-def]
+    repo = PromptTemplateRepository(mongo_test_db)
+    await repo.persist(PromptTemplate.create(name="iso-p", content="global-v1", version=1))
+    await repo.persist(
+        PromptTemplate.create(name="iso-p", content="userA-v2", version=2, user_id="user-A")
+    )
+    await repo.persist(
+        PromptTemplate.create(name="iso-p", content="userB-v3", version=3, user_id="user-B")
+    )
+
+    # 1. user-A should only see global (v1) and user-A (v2)
+    user_a_prompts = await repo.find_all_by_name("iso-p", user_id="user-A")
+    assert [t.version for t in user_a_prompts] == [2, 1]
+
+    # 2. No user_id should only see global (v1)
+    global_prompts = await repo.find_all_by_name("iso-p")
+    assert [t.version for t in global_prompts] == [1]
+

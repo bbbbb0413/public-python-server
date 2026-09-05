@@ -17,8 +17,12 @@ async def create(dto: CreatePromptIn, service: PromptServiceDep) -> PromptOut:
 
 
 @router.get("/{name}", response_model=list[PromptOut], response_model_by_alias=True)
-async def list_versions(name: str, service: PromptServiceDep) -> list[PromptOut]:
-    templates = await service.list_versions(name)
+async def list_versions(
+    name: str,
+    service: PromptServiceDep,
+    user_id: str | None = Query(default=None, alias="userId"),
+) -> list[PromptOut]:
+    templates = await service.list_versions(name, user_id=user_id)
     return [PromptOut.from_domain(t) for t in templates]
 
 
