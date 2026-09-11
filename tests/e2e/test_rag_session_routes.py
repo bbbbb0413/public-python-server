@@ -207,3 +207,19 @@ async def test_get_sessions_list_passes_keyword_and_pagination() -> None:
     assert body[0]["title"] == "매출 보고서 분석"
     repo_mock.find_by_user_id.assert_awaited_once_with("user-1", 2, 5, "매출")
 
+
+async def test_get_sessions_list_empty_result_returns_empty_list() -> None:
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+    repo_mock.find_by_user_id = AsyncMock(return_value=[])
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/rag/sessions?userId=user-1&keyword=존재하지않는제목"
+        )
+
+    assert response.status_code == 200
+    assert response.json() == []
+    repo_mock.find_by_user_id.assert_awaited_once_with("user-1", 1, 10, "존재하지않는제목")
+
