@@ -1,3 +1,4 @@
+import re
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -48,13 +49,17 @@ class ConversationSessionRepository:
         return self._to_domain(record) if record else None
 
     async def find_by_user_id(
-        self, user_id: str, page: int, limit: int
+        self, user_id: str, page: int, limit: int, keyword: str | None = None
     ) -> list[ConversationSession]:
+        query: dict[str, Any] = {"userId": user_id}
+        if keyword and keyword.strip():
+            query["title"] = {"$regex": re.escape(keyword.strip()), "$options": "i"}
         skip = (page - 1) * limit
         cursor = (
-            self._collection.find({"userId": user_id}).sort("updatedAt", -1).skip(skip).limit(limit)
+            self._collection.find(query).sort("updatedAt", -1).skip(skip).limit(limit)
         )
         return [self._to_domain(record) async for record in cursor]
+
 
     async def persist(self, session: ConversationSession) -> ConversationSession:
         await self._collection.insert_one(self._to_record(session))
