@@ -120,3 +120,36 @@ async def test_list_prompts_isolation_by_user_id(shared_repo) -> None:  # type: 
         assert res_none.status_code == 200
         assert res_none.json() == []
 
+
+async def test_list_prompts_when_only_user_prompts_exist(shared_repo) -> None:  # type: ignore[no-untyped-def]
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create user-A v1
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "user-a-v1",
+                "variables": ["context"],
+                "userId": "user-A",
+            },
+        )
+        # Create user-B v2
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "user-b-v2",
+                "variables": ["context"],
+                "userId": "user-B",
+            },
+        )
+
+        res = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
+        assert res.status_code == 200
+        items = res.json()
+        assert len(items) == 1
+        assert items[0]["version"] == 1
+        assert items[0]["userId"] == "user-A"
+
+
