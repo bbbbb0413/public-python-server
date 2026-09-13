@@ -68,3 +68,55 @@ async def test_create_rejects_invalid_name(shared_repo) -> None:  # type: ignore
         )
 
     assert response.status_code == 422
+
+
+async def test_list_prompts_isolation_by_user_id(shared_repo) -> None:  # type: ignore[no-untyped-def]
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create global v1
+        await client.post(
+            "/prompts",
+            json={"name": "rag-qa-system", "content": "global-v1", "variables": ["context"]},
+        )
+        # Create user-A v2
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "user-a-v2",
+                "variables": ["context"],
+                "userId": "user-A",
+            },
+        )
+        # Create user-B v3
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "user-b-v3",
+                "variables": ["context"],
+                "userId": "user-B",
+            },
+        )
+
+        # 1. user-A requests: should get global v1 and user-A v2 (total 2), but NOT user-B v3
+        res_a = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
+        assert res_a.status_code == 200
+        items_a = res_a.json()
+        assert len(items_a) == 2
+        assert [item["version"] for item in items_a] == [2, 1]
+        assert all(item.get("userId") in (None, "user-A") for item in items_a)
+
+        # 2. No userId requests (admin global): should get only global v1
+        res_global = await client.get("/prompts/rag-qa-system")
+        assert res_global.status_code == 200
+        items_global = res_global.json()
+        assert len(items_global) == 1
+        assert items_global[0]["version"] == 1
+        assert items_global[0].get("userId") is None
+
+        # 3. Non-existent name query: should return []
+        res_none = await client.get("/prompts/non-existent", params={"userId": "user-A"})
+        assert res_none.status_code == 200
+        assert res_none.json() == []
+

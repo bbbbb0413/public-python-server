@@ -3,33 +3,47 @@ from ai_service.prompt.schemas import PromptTemplate, PromptTemplateProps
 
 class FakePromptTemplateRepository:
     def __init__(self) -> None:
-        self.storage: dict[tuple[str, int], PromptTemplate] = {}
+        self.storage: dict[tuple[str, int, str | None], PromptTemplate] = {}
         self._next_id = 1
 
     async def persist(self, template: PromptTemplate) -> PromptTemplate:
         stored = PromptTemplate.restore(_props_with_id(template, str(self._next_id)))
         self._next_id += 1
-        self.storage[(stored.name.get_value(), stored.version)] = stored
+        self.storage[(stored.name.get_value(), stored.version, stored.user_id)] = stored
         return stored
 
     async def find_by_name_and_version(self, name: str, version: int) -> PromptTemplate | None:
-        return self.storage.get((name, version))
+        for (n, v, _), t in self.storage.items():
+            if n == name and v == version:
+                return t
+        return None
 
-    async def find_all_by_name(self, name: str) -> list[PromptTemplate]:
+    async def find_all_by_name(
+        self, name: str, user_id: str | None = None
+    ) -> list[PromptTemplate]:
         return sorted(
-            (t for (n, _), t in self.storage.items() if n == name),
+            (
+                t
+                for (n, _, _), t in self.storage.items()
+                if n == name
+                and (
+                    (t.user_id in (user_id, None))
+                    if user_id is not None
+                    else (t.user_id is None)
+                )
+            ),
             key=lambda t: t.version,
             reverse=True,
         )
 
     async def find_active(self, name: str) -> PromptTemplate | None:
-        for (n, _), t in self.storage.items():
+        for (n, _, _), t in self.storage.items():
             if n == name and t.user_id is None and t.is_active:
                 return t
         return None
 
     async def find_active_for_user(self, name: str, user_id: str) -> PromptTemplate | None:
-        for (n, _), t in self.storage.items():
+        for (n, _, _), t in self.storage.items():
             if n == name and t.user_id == user_id and t.is_active:
                 return t
         return None
@@ -48,7 +62,7 @@ class FakePromptTemplateRepository:
         await self.deactivate_all_by_name_for_user(name, user_id)
 
     async def update(self, template: PromptTemplate) -> PromptTemplate:
-        self.storage[(template.name.get_value(), template.version)] = template
+        self.storage[(template.name.get_value(), template.version, template.user_id)] = template
         return template
 
 

@@ -101,7 +101,7 @@ async def test_returns_hardcoded_default_when_nothing_stored() -> None:
 async def test_prefers_global_active_over_default() -> None:
     repo = FakePromptTemplateRepository()
     active = PromptTemplate.create(name="rag-qa-system", content="global").activate()
-    repo.storage[("rag-qa-system", active.version)] = active
+    repo.storage[("rag-qa-system", active.version, None)] = active
 
     service = PromptService(repo)
     template = await service.get_active_prompt("rag-qa-system")
@@ -112,12 +112,12 @@ async def test_prefers_global_active_over_default() -> None:
 async def test_prefers_user_specific_active_over_global() -> None:
     repo = FakePromptTemplateRepository()
     global_active = PromptTemplate.create(name="rag-qa-system", content="global").activate()
-    repo.storage[("rag-qa-system", global_active.version)] = global_active
+    repo.storage[("rag-qa-system", global_active.version, None)] = global_active
 
     user_active = PromptTemplate.create(
         name="rag-qa-system", content="for-user", version=2, user_id="user-1"
     ).activate()
-    repo.storage[("rag-qa-system", user_active.version)] = user_active
+    repo.storage[("rag-qa-system", user_active.version, "user-1")] = user_active
 
     service = PromptService(repo)
     template = await service.get_active_prompt("rag-qa-system", user_id="user-1")
@@ -130,10 +130,44 @@ async def test_other_users_active_prompt_never_leaks_as_fallback() -> None:
     user1_active = PromptTemplate.create(
         name="rag-qa-system", content="user-1-only", user_id="user-1"
     ).activate()
-    repo.storage[("rag-qa-system", user1_active.version)] = user1_active
+    repo.storage[("rag-qa-system", user1_active.version, "user-1")] = user1_active
 
     service = PromptService(repo)
     template = await service.get_active_prompt("rag-qa-system", user_id="user-2")
 
     assert template.content != "user-1-only"
     assert template.content == RAG_QA_DEFAULT_PROMPT
+
+
+async def test_list_versions_with_user_id_returns_global_and_own_prompts_only() -> None:
+    repo = FakePromptTemplateRepository()
+    service = PromptService(repo)
+    await service.create_prompt(CreatePromptIn(name="rag-qa-system", content="global-v1"))
+    await service.create_prompt(
+        CreatePromptIn(name="rag-qa-system", content="user-A-v2", userId="user-A")
+    )
+    await service.create_prompt(
+        CreatePromptIn(name="rag-qa-system", content="user-B-v3", userId="user-B")
+    )
+
+    templates_a = await service.list_versions("rag-qa-system", user_id="user-A")
+    assert [t.version for t in templates_a] == [2, 1]
+    assert all(t.user_id in (None, "user-A") for t in templates_a)
+
+
+async def test_list_versions_without_user_id_returns_global_prompts_only() -> None:
+    repo = FakePromptTemplateRepository()
+    service = PromptService(repo)
+    await service.create_prompt(CreatePromptIn(name="rag-qa-system", content="global-v1"))
+    await service.create_prompt(
+        CreatePromptIn(name="rag-qa-system", content="user-A-v2", userId="user-A")
+    )
+    await service.create_prompt(
+        CreatePromptIn(name="rag-qa-system", content="user-B-v3", userId="user-B")
+    )
+
+    global_templates = await service.list_versions("rag-qa-system")
+    assert len(global_templates) == 1
+    assert global_templates[0].version == 1
+    assert global_templates[0].user_id is None
+
