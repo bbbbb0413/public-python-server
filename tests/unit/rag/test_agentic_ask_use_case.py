@@ -412,3 +412,49 @@ async def test_agentic_ask_sources_include_snippet_and_mask_pii(
     assert len(sources[2]["snippet"]) == 303
     assert sources[2]["snippet"] == "B" * 300 + "..."
 
+
+@pytest.mark.asyncio
+async def test_agentic_ask_fallback_critique_triggers_refining(
+    mock_hybrid_search: AsyncMock,
+    mock_llm_gateway: MagicMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    # 1회차: 파싱 실패 폴백 (answered=False, missing=["비평 파싱 실패"], confidence=0.0)
+    # 2회차: 정상 비평 (answered=True, missing=[], confidence=0.9)
+    mock_critique_generator.generate.side_effect = [
+        Critique.of(answered=False, missing=["비평 파싱 실패"], next_query="", confidence=0.0),
+        Critique.of(answered=True, missing=[], next_query="", confidence=0.9),
+    ]
+
+    events: list[dict] = []
+
+    async def on_progress(data: dict) -> None:
+        events.append(data)
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        on_progress=on_progress,
+    )
+
+    command = AgenticAskCommand(
+        question="비평 실패 시 재시도 확인 질문",
+        budget=IterationBudget.of(max_iterations=3, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.6,
+    )
+
+    chunks = [c async for c in use_case.execute(command)]
+    assert "".join(chunks) == "테스트 답변입니다."
+    assert mock_critique_generator.generate.call_count == 2
+    assert mock_query_refiner.refine.call_count == 1
+
+
