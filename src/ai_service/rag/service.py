@@ -17,9 +17,10 @@ class SessionService:
         self._repo = repo
 
     async def get_sessions(
-        self, user_id: str, page: int, limit: int
+        self, user_id: str, page: int, limit: int, keyword: str | None = None
     ) -> list[ConversationSession]:
-        return await self._repo.find_by_user_id(user_id, page, limit)
+        return await self._repo.find_by_user_id(user_id, page, limit, keyword)
+
 
     async def get_session(self, session_id: str, user_id: str) -> ConversationSession:
         session = await self._repo.find_by_id_for_user(session_id, user_id)

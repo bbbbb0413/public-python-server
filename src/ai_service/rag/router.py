@@ -19,9 +19,11 @@ async def get_sessions(
     user_id: str = Query(alias="userId"),
     page: int = Query(default=DEFAULT_PAGE),
     limit: int = Query(default=DEFAULT_LIMIT),
+    keyword: str | None = Query(default=None),
 ) -> list[SessionOut]:
-    sessions = await service.get_sessions(user_id, page, limit)
+    sessions = await service.get_sessions(user_id, page, limit, keyword)
     return [SessionOut.from_domain(s) for s in sessions]
+
 
 
 @router.get("/{session_id}", response_model=SessionDetailOut, response_model_by_alias=True)
