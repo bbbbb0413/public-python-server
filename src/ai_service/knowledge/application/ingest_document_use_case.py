@@ -2,6 +2,7 @@ import hashlib
 import io
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -83,7 +84,11 @@ class IngestDocumentUseCase:
             separators=["\n\n", "\n", *KOREAN_SENTENCE_ENDINGS, " ", ""],
         )
 
-    async def execute(self, command: IngestDocumentCommand) -> Document:
+    async def execute(
+        self,
+        command: IngestDocumentCommand,
+        on_progress: Callable[[str, int], Awaitable[None]] | None = None,
+    ) -> Document:
         document: Document
         if command.document_id:
             existing = await self._document_repo.find_by_id(command.document_id)
@@ -102,13 +107,19 @@ class IngestDocumentUseCase:
         )
 
         try:
+            if on_progress:
+                await on_progress("extract", 20)
             raw_text = self._extract_text(command.content, command.mime_type)
             verdict = self._rag_validator.inspect_input(raw_text)
             if not verdict.is_allowed():
                 raise ValueError(f"인제스트 차단: {verdict.get_reason()}")
 
-            vector_docs = await self._build_vector_docs(raw_text, document_id, command.file_name)
+            vector_docs = await self._build_vector_docs(
+                raw_text, document_id, command.file_name, on_progress=on_progress
+            )
 
+            if on_progress:
+                await on_progress("index", 90)
             await self._vector_store.delete_by_document_id(document_id)
             await self._vector_store.upsert(vector_docs)
 
@@ -121,8 +132,14 @@ class IngestDocumentUseCase:
             raise
 
     async def _build_vector_docs(
-        self, raw_text: str, document_id: str, file_name: str
+        self,
+        raw_text: str,
+        document_id: str,
+        file_name: str,
+        on_progress: Callable[[str, int], Awaitable[None]] | None = None,
     ) -> list[VectorDocument]:
+        if on_progress:
+            await on_progress("chunk", 45)
         parent_texts = self._split_by_paragraph_first(raw_text)
         parent_offsets = self._compute_chunk_offsets(raw_text, parent_texts)
 
@@ -135,6 +152,9 @@ class IngestDocumentUseCase:
             ]
         else:
             context_prefixes = ["" for _ in parent_texts]
+
+        if on_progress:
+            await on_progress("embed", 70)
 
         vector_docs: list[VectorDocument] = []
         global_child_index = 0
