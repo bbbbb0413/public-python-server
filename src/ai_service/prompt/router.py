@@ -22,7 +22,7 @@ async def list_versions(
     service: PromptServiceDep,
     user_id: str | None = Query(default=None, alias="userId"),
 ) -> list[PromptOut]:
-    templates = await service.list_versions(name, user_id=user_id)
+    templates = await service.list_versions(name, user_id)
     return [PromptOut.from_domain(t) for t in templates]
 
 

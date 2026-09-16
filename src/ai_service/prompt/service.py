@@ -73,7 +73,7 @@ class PromptService:
     async def list_versions(
         self, name: str, user_id: str | None = None
     ) -> list[PromptTemplate]:
-        return await self._repo.find_all_by_name(name, user_id=user_id)
+        return await self._repo.find_all_by_name(name, user_id)
 
     async def activate_prompt(
         self, name: str, version: int, user_id: str | None = None

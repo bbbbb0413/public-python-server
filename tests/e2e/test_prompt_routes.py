@@ -70,6 +70,10 @@ async def test_create_rejects_invalid_name(shared_repo) -> None:  # type: ignore
     assert response.status_code == 422
 
 
+async def test_list_prompts_isolation_by_user_id(shared_repo) -> None:  # type: ignore[no-untyped-def]
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create global v1
 async def test_list_versions_user_isolation(shared_repo) -> None:  # type: ignore[no-untyped-def]
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -81,7 +85,7 @@ async def test_list_versions_user_isolation(shared_repo) -> None:  # type: ignor
             "/prompts",
             json={
                 "name": "rag-qa-system",
-                "content": "userA-v2",
+                "content": "user-a-v2",
                 "variables": ["context"],
                 "userId": "user-A",
             },
@@ -90,12 +94,38 @@ async def test_list_versions_user_isolation(shared_repo) -> None:  # type: ignor
             "/prompts",
             json={
                 "name": "rag-qa-system",
-                "content": "userB-v3",
+                "content": "user-b-v3",
                 "variables": ["context"],
                 "userId": "user-B",
             },
         )
 
+        # 1. user-A requests: should get global v1 and user-A v2 (total 2), but NOT user-B v3
+        res_a = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
+        assert res_a.status_code == 200
+        items_a = res_a.json()
+        assert len(items_a) == 2
+        assert [item["version"] for item in items_a] == [2, 1]
+        assert all(item.get("userId") in (None, "user-A") for item in items_a)
+
+        # 2. No userId requests (admin global): should get only global v1
+        res_global = await client.get("/prompts/rag-qa-system")
+        assert res_global.status_code == 200
+        items_global = res_global.json()
+        assert len(items_global) == 1
+        assert items_global[0]["version"] == 1
+        assert items_global[0].get("userId") is None
+
+        # 3. Non-existent name query: should return []
+        res_none = await client.get("/prompts/non-existent", params={"userId": "user-A"})
+        assert res_none.status_code == 200
+        assert res_none.json() == []
+
+
+async def test_list_prompts_when_only_user_prompts_exist(shared_repo) -> None:  # type: ignore[no-untyped-def]
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create user-A v1
         # 1. user-A should see global-v1 + userA-v2, but NOT userB-v3
         resp_a = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
         assert resp_a.status_code == 200
@@ -118,7 +148,7 @@ async def test_list_versions_when_no_global_prompt_exists(shared_repo) -> None: 
             "/prompts",
             json={
                 "name": "rag-qa-system",
-                "content": "userA-v1",
+                "content": "user-a-v1",
                 "variables": ["context"],
                 "userId": "user-A",
             },
@@ -127,16 +157,16 @@ async def test_list_versions_when_no_global_prompt_exists(shared_repo) -> None: 
             "/prompts",
             json={
                 "name": "rag-qa-system",
-                "content": "userB-v2",
+                "content": "user-b-v2",
                 "variables": ["context"],
                 "userId": "user-B",
             },
         )
 
-        resp = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
-        assert resp.status_code == 200
-        data = resp.json()
-        assert len(data) == 1
-        assert data[0]["version"] == 1
-        assert data[0]["userId"] == "user-A"
+        res = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
+        assert res.status_code == 200
+        items = res.json()
+        assert len(items) == 1
+        assert items[0]["version"] == 1
+        assert items[0]["userId"] == "user-A"
 

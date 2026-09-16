@@ -3,25 +3,44 @@ from ai_service.prompt.schemas import PromptTemplate, PromptTemplateProps
 
 class FakePromptTemplateRepository:
     def __init__(self) -> None:
-        self.storage: dict[str, PromptTemplate] = {}
+        self.storage: dict[tuple[str, int, str | None], PromptTemplate] = {}
         self._next_id = 1
 
     async def persist(self, template: PromptTemplate) -> PromptTemplate:
         template_id = template.id or str(self._next_id)
         stored = PromptTemplate.restore(_props_with_id(template, template_id))
         self._next_id += 1
-        self.storage[template_id] = stored
+        
+        self.storage[(stored.name.get_value(), stored.version, stored.user_id)] = stored
         return stored
 
     async def find_by_name_and_version(self, name: str, version: int) -> PromptTemplate | None:
-        for t in self.storage.values():
-            if t.name.get_value() == name and t.version == version:
+        for (n, v, _), t in self.storage.items():
+            if n == name and v == version:
                 return t
         return None
 
     async def find_all_by_name(
         self, name: str, user_id: str | None = None
     ) -> list[PromptTemplate]:
+        return sorted(
+            (
+                t
+                for (n, _, _), t in self.storage.items()
+                if n == name
+                and (
+                    (t.user_id in (user_id, None))
+                    if user_id is not None
+                    else (t.user_id is None)
+                )
+            ),
+            key=lambda t: t.version,
+            reverse=True,
+        )
+
+    async def find_active(self, name: str) -> PromptTemplate | None:
+        for (n, _, _), t in self.storage.items():
+            if n == name and t.user_id is None and t.is_active:
         if user_id is not None:
             matches = [
                 t
@@ -62,8 +81,7 @@ class FakePromptTemplateRepository:
         await self.deactivate_all_by_name_for_user(name, user_id)
 
     async def update(self, template: PromptTemplate) -> PromptTemplate:
-        template_id = template.id or str(self._next_id)
-        self.storage[template_id] = template
+        self.storage[(template.name.get_value(), template.version, template.user_id)] = template
         return template
 
 

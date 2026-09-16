@@ -60,6 +60,44 @@ async def test_find_active_for_user(mongo_test_db) -> None:  # type: ignore[no-u
 
 async def test_find_all_by_name_user_isolation(mongo_test_db) -> None:  # type: ignore[no-untyped-def]
     repo = PromptTemplateRepository(mongo_test_db)
+    await repo.persist(PromptTemplate.create(name="p", content="global-v1", version=1))
+    await repo.persist(
+        PromptTemplate.create(name="p", content="user-a-v2", version=2, user_id="user-A")
+    )
+    await repo.persist(
+        PromptTemplate.create(name="p", content="user-b-v3", version=3, user_id="user-B")
+    )
+
+    # 1. user-A should get own (v2) and global (v1), sorted by version desc
+    user_a_results = await repo.find_all_by_name("p", user_id="user-A")
+    assert [t.version for t in user_a_results] == [2, 1]
+    assert all(t.user_id in (None, "user-A") for t in user_a_results)
+
+    # 2. None user_id should get global (v1) only
+    global_results = await repo.find_all_by_name("p")
+    assert [t.version for t in global_results] == [1]
+    assert global_results[0].user_id is None
+
+
+async def test_find_all_by_name_user_isolation_when_no_global_prompt(mongo_test_db) -> None:  # type: ignore[no-untyped-def]
+    repo = PromptTemplateRepository(mongo_test_db)
+    await repo.persist(
+        PromptTemplate.create(
+            name="user-only-prompt", content="user-a-v1", version=1, user_id="user-A"
+        )
+    )
+    await repo.persist(
+        PromptTemplate.create(
+            name="user-only-prompt", content="user-b-v2", version=2, user_id="user-B"
+        )
+    )
+
+    user_a_results = await repo.find_all_by_name("user-only-prompt", user_id="user-A")
+    assert len(user_a_results) == 1
+    assert user_a_results[0].version == 1
+    assert user_a_results[0].user_id == "user-A"
+
+
     await repo.persist(PromptTemplate.create(name="iso-p", content="global-v1", version=1))
     await repo.persist(
         PromptTemplate.create(name="iso-p", content="userA-v2", version=2, user_id="user-A")
@@ -75,4 +113,3 @@ async def test_find_all_by_name_user_isolation(mongo_test_db) -> None:  # type: 
     # 2. No user_id should only see global (v1)
     global_prompts = await repo.find_all_by_name("iso-p")
     assert [t.version for t in global_prompts] == [1]
-
