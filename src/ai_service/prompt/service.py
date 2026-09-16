@@ -58,7 +58,7 @@ class PromptService:
     execute = get_active_prompt
 
     async def create_prompt(self, dto: CreatePromptIn) -> PromptTemplate:
-        existing = await self._repo.find_all_by_name(dto.name)
+        existing = await self._repo.find_all_by_name(dto.name, user_id=dto.user_id)
         next_version = max((t.version for t in existing), default=0) + 1
 
         template = PromptTemplate.create(

@@ -85,12 +85,19 @@ class IngestRequestedConsumer:
             raise ValueError(f"업로드된 파일을 찾을 수 없습니다: jobId={message.job_id}")
 
         content = base64.b64decode(encoded_content)
+
+        async def on_progress(step: str, progress: int) -> None:
+            await self._publisher.publish_progress(
+                message.job_id, {"step": step, "progress": progress}
+            )
+
         document = await self._composition.ingest_use_case.execute(
             IngestDocumentCommand(
                 file_name=message.file_name,
                 mime_type=message.mime_type,
                 content=content,
-            )
+            ),
+            on_progress=on_progress,
         )
 
         await self._publisher.publish_done(
