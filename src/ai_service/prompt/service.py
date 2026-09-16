@@ -58,7 +58,7 @@ class PromptService:
     execute = get_active_prompt
 
     async def create_prompt(self, dto: CreatePromptIn) -> PromptTemplate:
-        existing = await self._repo.find_all_by_name(dto.name)
+        existing = await self._repo.find_all_by_name(dto.name, user_id=dto.user_id)
         next_version = max((t.version for t in existing), default=0) + 1
 
         template = PromptTemplate.create(
@@ -70,8 +70,10 @@ class PromptService:
         )
         return await self._repo.persist(template)
 
-    async def list_versions(self, name: str) -> list[PromptTemplate]:
-        return await self._repo.find_all_by_name(name)
+    async def list_versions(
+        self, name: str, user_id: str | None = None
+    ) -> list[PromptTemplate]:
+        return await self._repo.find_all_by_name(name, user_id=user_id)
 
     async def activate_prompt(
         self, name: str, version: int, user_id: str | None = None
