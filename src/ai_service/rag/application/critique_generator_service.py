@@ -122,11 +122,13 @@ class CritiqueGeneratorService:
     def _parse_critique(self, raw: str) -> Critique:
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         if not match:
+            logger.warning("Critique 응답에서 JSON 패턴을 찾지 못했습니다: %s", raw)
             return self._fallback_critique()
 
         try:
             parsed: dict[str, Any] = json.loads(match.group(0))
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            logger.warning("Critique JSON 파싱 실패: %s, raw: %s", e, raw)
             return self._fallback_critique()
 
         answered = parsed.get("answered") is True
@@ -139,13 +141,19 @@ class CritiqueGeneratorService:
         confidence_raw = parsed.get("confidence")
         confidence = (
             confidence_raw
-            if isinstance(confidence_raw, int | float) and 0 <= confidence_raw <= 1
-            else 0.7
+            if isinstance(confidence_raw, int | float)
+            and not isinstance(confidence_raw, bool)
+            and 0 <= confidence_raw <= 1
+            else 0.0
         )
 
         return Critique.of(answered, missing, next_query, float(confidence))
 
     @staticmethod
     def _fallback_critique() -> Critique:
-        # 파싱 실패 시 첫 번째 답변을 그대로 사용 (임계값 0.6 이상으로 재반복 방지)
-        return Critique.of(True, [], "", 0.7)
+        return Critique.of(
+            answered=False,
+            missing=["비평 파싱 실패"],
+            next_query="",
+            confidence=0.0,
+        )
