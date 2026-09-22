@@ -94,6 +94,8 @@ class AskUseCase:
         chunks = hybrid_result.chunks
 
         if chunks:
+            confidence = max(c.score for c in chunks)
+            missing: list[str] = []
             sources = [
                 {
                     "fileName": c.metadata.file_name,
@@ -105,6 +107,11 @@ class AskUseCase:
                 for c in chunks
             ]
             yield f"__SOURCES:{json.dumps(sources)}"
+        else:
+            confidence = 0.0
+            missing = ["관련 지식베이스 문서를 찾지 못함"]
+
+        yield f"__METADATA:{json.dumps({'confidence': confidence, 'missing': missing})}"
 
         cache_key = self._build_cache_key(command.question, chunks)
         cached = await self._llm_cache.get(cache_key)
