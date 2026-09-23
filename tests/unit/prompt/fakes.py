@@ -38,22 +38,6 @@ class FakePromptTemplateRepository:
             reverse=True,
         )
 
-    async def find_active(self, name: str) -> PromptTemplate | None:
-        for (n, _, _), t in self.storage.items():
-            if n == name and t.user_id is None and t.is_active:
-        if user_id is not None:
-            matches = [
-                t
-                for t in self.storage.values()
-                if t.name.get_value() == name and (t.user_id == user_id or t.user_id is None)
-            ]
-        else:
-            matches = [
-                t
-                for t in self.storage.values()
-                if t.name.get_value() == name and t.user_id is None
-            ]
-        return sorted(matches, key=lambda t: t.version, reverse=True)
 
     async def find_active(self, name: str) -> PromptTemplate | None:
         for t in self.storage.values():

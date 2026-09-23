@@ -561,5 +561,106 @@ async def test_ask_requested_consumer_complex_persists_confidence_and_missing_to
     assert updated_session.turns[1].missing == ["추가 설명"]
 
 
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_multi_turn_sources_emitted_and_persisted_to_session():
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+
+    agentic_use_case_mock = MagicMock(spec=AgenticAskUseCase)
+
+    async def fake_agentic_execute(command) -> AsyncIterator[str]:
+        # 1회차 출처 방출
+        src_1 = [
+            {
+                "documentId": "doc-1",
+                "chunkIndex": 0,
+                "fileName": "doc1.pdf",
+                "snippet": "내용1",
+                "score": 0.8,
+            }
+        ]
+        yield f"__SOURCES:{json.dumps(src_1)}"
+        # 2회차 누적 출처 방출
+        src_2 = [
+            *src_1,
+            {
+                "documentId": "doc-2",
+                "chunkIndex": 1,
+                "fileName": "doc2.pdf",
+                "snippet": "내용2",
+                "score": 0.9,
+            },
+        ]
+        yield f"__SOURCES:{json.dumps(src_2)}"
+        yield "최종 답변입니다."
+
+    agentic_use_case_mock.execute.side_effect = fake_agentic_execute
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "complex"
+
+    validator_mock = MagicMock(spec=RagContentValidator)
+    validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
+
+    initial_session = ConversationSession.create("user-1", "다회차 질의")
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
+    session_repo_mock.persist = AsyncMock(return_value=initial_session)
+    session_repo_mock.update = AsyncMock(return_value=initial_session)
+
+    composition = RagComposition(
+        ask_use_case=MagicMock(spec=AskUseCase),
+        agentic_ask_use_case=agentic_use_case_mock,
+        query_complexity_router=router_mock,
+        rag_validator=validator_mock,
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(3, 1000, 5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    message = AskRequestedMessage(
+        job_id="test-job-multi-sources",
+        user_id="user-1",
+        question="다회차 질의",
+        session_id=initial_session.get_session_id(),
+    )
+    await consumer._process(message)
+
+    # sources 타입 이벤트 2회 발행 확인
+    sources_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "sources"
+    ]
+    assert len(sources_calls) == 2
+
+    first_sources = json.loads(sources_calls[0].args[1]["data"])
+    assert len(first_sources) == 1
+    assert first_sources[0]["documentId"] == "doc-1"
+
+    second_sources = json.loads(sources_calls[1].args[1]["data"])
+    assert len(second_sources) == 2
+    assert second_sources[0]["documentId"] == "doc-1"
+    assert second_sources[1]["documentId"] == "doc-2"
+
+    # 세션 턴에 최종 누적 출처 저장 확인
+    session_repo_mock.update.assert_awaited_once()
+    updated_session = session_repo_mock.update.await_args[0][0]
+    assistant_turn = updated_session.turns[1]
+    assert assistant_turn.sources is not None
+    assert len(assistant_turn.sources) == 2
+    assert assistant_turn.sources[0]["documentId"] == "doc-1"
+    assert assistant_turn.sources[1]["documentId"] == "doc-2"
+
+
 
 

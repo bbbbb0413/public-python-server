@@ -458,3 +458,285 @@ async def test_agentic_ask_fallback_critique_triggers_refining(
     assert mock_query_refiner.refine.call_count == 1
 
 
+@pytest.mark.asyncio
+async def test_agentic_ask_multi_iteration_accumulates_sources(
+    mock_hybrid_search: AsyncMock,
+    mock_llm_gateway: MagicMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    # 1회차: doc-1 (chunk 0) 검색 -> 비평 불만족
+    # 2회차: doc-2 (chunk 1) 추가 검색 -> 비평 만족
+    mock_critique_generator.generate.side_effect = [
+        Critique.of(
+            answered=False,
+            missing=["추가 정보 필요"],
+            next_query="추가 쿼리",
+            confidence=0.4,
+        ),
+        Critique.of(answered=True, missing=[], next_query="", confidence=0.9),
+    ]
+
+    chunk_1 = SimilaritySearchResult(
+        text="첫 번째 문서 내용",
+        score=0.8,
+        metadata=VectorDocumentMetadata(
+            document_id="doc-1",
+            file_name="doc1.pdf",
+            chunk_index=0,
+        ),
+    )
+    chunk_2 = SimilaritySearchResult(
+        text="두 번째 문서 내용",
+        score=0.85,
+        metadata=VectorDocumentMetadata(
+            document_id="doc-2",
+            file_name="doc2.pdf",
+            chunk_index=1,
+        ),
+    )
+
+    mock_hybrid_search.execute.side_effect = [
+        HybridSearchResult(chunks=[chunk_1], query_embedding=[0.1]),
+        HybridSearchResult(chunks=[chunk_2], query_embedding=[0.2]),
+    ]
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+    )
+
+    command = AgenticAskCommand(
+        question="다회차 출처 확인 질문",
+        budget=IterationBudget.of(max_iterations=3, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+    )
+
+    emitted_chunks = [c async for c in use_case.execute(command)]
+    source_events = [c for c in emitted_chunks if c.startswith("__SOURCES:")]
+
+    assert len(source_events) == 2
+
+    # 1회차 방출 출처 목록: doc-1
+    sources_it1 = json.loads(source_events[0][len("__SOURCES:") :])
+    assert len(sources_it1) == 1
+    assert sources_it1[0]["documentId"] == "doc-1"
+    assert sources_it1[0]["chunkIndex"] == 0
+    assert sources_it1[0]["fileName"] == "doc1.pdf"
+    assert sources_it1[0]["snippet"] == "첫 번째 문서 내용"
+    assert sources_it1[0]["score"] == 0.8
+
+    # 2회차 방출 출처 목록: doc-1, doc-2 모두 포함
+    sources_it2 = json.loads(source_events[1][len("__SOURCES:") :])
+    assert len(sources_it2) == 2
+    assert sources_it2[0]["documentId"] == "doc-1"
+    assert sources_it2[1]["documentId"] == "doc-2"
+    assert sources_it2[1]["chunkIndex"] == 1
+    assert sources_it2[1]["fileName"] == "doc2.pdf"
+    assert sources_it2[1]["snippet"] == "두 번째 문서 내용"
+    assert sources_it2[1]["score"] == 0.85
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_multi_iteration_deduplicates_sources_and_updates_higher_score(
+    mock_hybrid_search: AsyncMock,
+    mock_llm_gateway: MagicMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    # 1회차: doc-1 (chunk 0, score=0.7)
+    # 2회차: 동일한 doc-1 (chunk 0, score=0.95) 재검색
+    mock_critique_generator.generate.side_effect = [
+        Critique.of(answered=False, missing=["미흡"], next_query="재검색", confidence=0.3),
+        Critique.of(answered=True, missing=[], next_query="", confidence=0.9),
+    ]
+
+    chunk_it1 = SimilaritySearchResult(
+        text="중복 문서 내용",
+        score=0.7,
+        metadata=VectorDocumentMetadata(
+            document_id="doc-1",
+            file_name="guide.pdf",
+            chunk_index=0,
+        ),
+    )
+    chunk_it2 = SimilaritySearchResult(
+        text="중복 문서 내용",
+        score=0.95,
+        metadata=VectorDocumentMetadata(
+            document_id="doc-1",
+            file_name="guide.pdf",
+            chunk_index=0,
+        ),
+    )
+
+    mock_hybrid_search.execute.side_effect = [
+        HybridSearchResult(chunks=[chunk_it1], query_embedding=[0.1]),
+        HybridSearchResult(chunks=[chunk_it2], query_embedding=[0.2]),
+    ]
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+    )
+
+    command = AgenticAskCommand(
+        question="중복 청크 병합 확인",
+        budget=IterationBudget.of(max_iterations=3, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+    )
+
+    emitted_chunks = [c async for c in use_case.execute(command)]
+    source_events = [c for c in emitted_chunks if c.startswith("__SOURCES:")]
+
+    assert len(source_events) == 2
+    sources_it2 = json.loads(source_events[1][len("__SOURCES:") :])
+    assert len(sources_it2) == 1
+    assert sources_it2[0]["documentId"] == "doc-1"
+    assert sources_it2[0]["chunkIndex"] == 0
+    assert sources_it2[0]["score"] == 0.95
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_empty_first_iteration_emits_sources_on_second_iteration(
+    mock_hybrid_search: AsyncMock,
+    mock_llm_gateway: MagicMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    # 1회차: 검색 결과 0건
+    # 2회차: 검색 결과 1건
+    mock_critique_generator.generate.side_effect = [
+        Critique.of(answered=False, missing=["결과 없음"], next_query="재검색", confidence=0.0),
+        Critique.of(answered=True, missing=[], next_query="", confidence=0.9),
+    ]
+
+    chunk_it2 = SimilaritySearchResult(
+        text="2회차에 찾은 문서",
+        score=0.88,
+        metadata=VectorDocumentMetadata(
+            document_id="doc-2",
+            file_name="faq.pdf",
+            chunk_index=0,
+        ),
+    )
+
+    mock_hybrid_search.execute.side_effect = [
+        HybridSearchResult(chunks=[], query_embedding=[0.1]),
+        HybridSearchResult(chunks=[chunk_it2], query_embedding=[0.2]),
+    ]
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+    )
+
+    command = AgenticAskCommand(
+        question="1회차 검색 결과 없을 때 질문",
+        budget=IterationBudget.of(max_iterations=3, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+    )
+
+    emitted_chunks = [c async for c in use_case.execute(command)]
+    source_events = [c for c in emitted_chunks if c.startswith("__SOURCES:")]
+
+    assert len(source_events) == 1
+    sources = json.loads(source_events[0][len("__SOURCES:") :])
+    assert len(sources) == 1
+    assert sources[0]["documentId"] == "doc-2"
+    assert sources[0]["snippet"] == "2회차에 찾은 문서"
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_sources_pii_masked_in_all_iterations(
+    mock_hybrid_search: AsyncMock,
+    mock_llm_gateway: MagicMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    mock_critique_generator.generate.side_effect = [
+        Critique.of(answered=False, missing=["추가"], next_query="추가 쿼리", confidence=0.4),
+        Critique.of(answered=True, missing=[], next_query="", confidence=0.9),
+    ]
+
+    chunk_it1 = SimilaritySearchResult(
+        text="담당자 연락처: 010-1111-2222",
+        score=0.8,
+        metadata=VectorDocumentMetadata(
+            document_id="doc-1",
+            file_name="contact1.pdf",
+            chunk_index=0,
+        ),
+    )
+    chunk_it2 = SimilaritySearchResult(
+        text="비상 연락처: 010-3333-4444",
+        score=0.85,
+        metadata=VectorDocumentMetadata(
+            document_id="doc-2",
+            file_name="contact2.pdf",
+            chunk_index=0,
+        ),
+    )
+
+    mock_hybrid_search.execute.side_effect = [
+        HybridSearchResult(chunks=[chunk_it1], query_embedding=[0.1]),
+        HybridSearchResult(chunks=[chunk_it2], query_embedding=[0.2]),
+    ]
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+    )
+
+    command = AgenticAskCommand(
+        question="PII 마스킹 확인 질문",
+        budget=IterationBudget.of(max_iterations=3, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+    )
+
+    emitted_chunks = [c async for c in use_case.execute(command)]
+    source_events = [c for c in emitted_chunks if c.startswith("__SOURCES:")]
+
+    assert len(source_events) == 2
+    sources_it2 = json.loads(source_events[1][len("__SOURCES:") :])
+    assert len(sources_it2) == 2
+
+    assert "010-1111-2222" not in sources_it2[0]["snippet"]
+    assert "[REDACTED_KR_PHONE]" in sources_it2[0]["snippet"]
+
+    assert "010-3333-4444" not in sources_it2[1]["snippet"]
+    assert "[REDACTED_KR_PHONE]" in sources_it2[1]["snippet"]
+
+
