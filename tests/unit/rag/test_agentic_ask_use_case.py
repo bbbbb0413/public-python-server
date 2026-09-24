@@ -173,7 +173,7 @@ async def test_agentic_ask_multi_iteration_progress_events(
     )
 
     chunks = [c async for c in use_case.execute(command)]
-    assert "".join(chunks) == "테스트 답변입니다."
+    assert "".join(chunks) == "테스트 답변입니다.\n\n테스트 답변입니다."
 
     # 1회차: searching -> generating -> critiquing -> refining
     # 2회차: searching -> generating -> critiquing -> 최종 완료
@@ -249,7 +249,7 @@ async def test_agentic_ask_budget_exhausted_progress_events(
     )
 
     chunks = [c async for c in use_case.execute(command)]
-    assert "".join(chunks) == "테스트 답변입니다."
+    assert "".join(chunks) == "테스트 답변입니다.\n\n테스트 답변입니다."
 
     assert len(events) == 7
     assert events[0] == {"iteration": 1, "phase": "searching", "confidence": 0.0, "missing": []}
@@ -453,8 +453,187 @@ async def test_agentic_ask_fallback_critique_triggers_refining(
     )
 
     chunks = [c async for c in use_case.execute(command)]
-    assert "".join(chunks) == "테스트 답변입니다."
+    assert "".join(chunks) == "테스트 답변입니다.\n\n테스트 답변입니다."
     assert mock_critique_generator.generate.call_count == 2
     assert mock_query_refiner.refine.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_streams_tokens_immediately_as_they_arrive(
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    tokens = ["안녕", "하세요", ", ", "반갑", "습니다."]
+    mock_llm_gateway = MagicMock(spec=LlmGatewayService)
+
+    async def fake_stream(_command) -> AsyncIterator[str]:
+        for t in tokens:
+            yield t
+
+    mock_llm_gateway.stream.side_effect = fake_stream
+
+    mock_critique_generator.generate.return_value = Critique.of(
+        answered=True, missing=[], next_query="", confidence=0.9
+    )
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+    )
+
+    command = AgenticAskCommand(
+        question="인사 질문",
+        budget=IterationBudget.of(max_iterations=1, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+    )
+
+    streamed_tokens: list[str] = []
+    async for chunk in use_case.execute(command):
+        streamed_tokens.append(chunk)
+
+    # 전체 한 번에 합쳐서 오는 것이 아니라, 각 토큰이 개별적으로 yield되어야 함
+    assert streamed_tokens == tokens
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_masks_pii_during_token_streaming(
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    tokens = ["연락처는 ", "010-1234-5678", " 입니다."]
+    mock_llm_gateway = MagicMock(spec=LlmGatewayService)
+
+    async def fake_stream(_command) -> AsyncIterator[str]:
+        for t in tokens:
+            yield t
+
+    mock_llm_gateway.stream.side_effect = fake_stream
+
+    mock_critique_generator.generate.return_value = Critique.of(
+        answered=True, missing=[], next_query="", confidence=0.9
+    )
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+    )
+
+    command = AgenticAskCommand(
+        question="개인정보 질문",
+        budget=IterationBudget.of(max_iterations=1, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+    )
+
+    streamed_tokens = [c async for c in use_case.execute(command)]
+    assert "010-1234-5678" not in streamed_tokens
+    assert any("[REDACTED_KR_PHONE]" in t for t in streamed_tokens)
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_stops_streaming_when_token_budget_exhausted(
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    # 각 청크당 40자 -> APPROX_CHARS_PER_TOKEN(4) 기준 청크당 10토큰
+    long_tokens = ["A" * 40 for _ in range(10)]
+    mock_llm_gateway = MagicMock(spec=LlmGatewayService)
+
+    async def fake_stream(_command) -> AsyncIterator[str]:
+        for t in long_tokens:
+            yield t
+
+    mock_llm_gateway.stream.side_effect = fake_stream
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+    )
+
+    # token_budget=25 -> 3번째 토큰(30토큰) 도달 시 중단되어야 함
+    command = AgenticAskCommand(
+        question="긴 답변 질문",
+        budget=IterationBudget.of(max_iterations=1, token_budget=25, timeout_ms=5000),
+        confidence_threshold=0.8,
+    )
+
+    streamed_tokens = [c async for c in use_case.execute(command)]
+    # 전체 10개가 아니라 버짓 소진 시점에서 스트림이 조기 종료되어야 함
+    assert len(streamed_tokens) < len(long_tokens)
+    assert len(streamed_tokens) <= 3
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_empty_chunks_handles_gracefully(
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    # 검색된 청크가 0건인 상황
+    mock_hybrid_search.execute.return_value = HybridSearchResult(chunks=[], query_embedding=[0.1])
+
+    mock_llm_gateway = MagicMock(spec=LlmGatewayService)
+
+    async def fake_stream(_command) -> AsyncIterator[str]:
+        for t in ["관련", " 정보를", " 찾을 수 없습니다."]:
+            yield t
+
+    mock_llm_gateway.stream.side_effect = fake_stream
+
+    mock_critique_generator.generate.return_value = Critique.of(
+        answered=True, missing=[], next_query="", confidence=0.9
+    )
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+    )
+
+    command = AgenticAskCommand(
+        question="없는 정보 질문",
+        budget=IterationBudget.of(max_iterations=1, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+    )
+
+    streamed_tokens = [c async for c in use_case.execute(command)]
+    # __SOURCES: 없이 토큰만 정상 방출됨
+    assert not any(t.startswith("__SOURCES:") for t in streamed_tokens)
+    assert "".join(streamed_tokens) == "관련 정보를 찾을 수 없습니다."
+
+
 
 

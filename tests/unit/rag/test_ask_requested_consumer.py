@@ -561,5 +561,71 @@ async def test_ask_requested_consumer_complex_persists_confidence_and_missing_to
     assert updated_session.turns[1].missing == ["추가 설명"]
 
 
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_agentic_cancelled_stops_streaming():
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+
+    # 첫 토큰은 정상 수신, 두 번째 토큰 수신 시점에서 취소 감지
+    redis_mock.get = AsyncMock(side_effect=[None, b"1", b"1"])
+
+    agentic_use_case_mock = MagicMock(spec=AgenticAskUseCase)
+
+    async def fake_agentic_stream(_command) -> AsyncIterator[str]:
+        yield "첫번째 토큰 "
+        yield "두번째 토큰 "
+        yield "세번째 토큰 "
+
+    agentic_use_case_mock.execute.side_effect = fake_agentic_stream
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "complex"
+
+    validator_mock = MagicMock(spec=RagContentValidator)
+    validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
+
+    initial_session = ConversationSession.create("user-1", "복잡한 질문")
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
+    session_repo_mock.persist = AsyncMock(return_value=initial_session)
+    session_repo_mock.update = AsyncMock(return_value=initial_session)
+
+    composition = RagComposition(
+        ask_use_case=MagicMock(spec=AskUseCase),
+        agentic_ask_use_case=agentic_use_case_mock,
+        query_complexity_router=router_mock,
+        rag_validator=validator_mock,
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(3, 1000, 5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    message = AskRequestedMessage(
+        job_id="test-job-agentic-cancel",
+        user_id="user-1",
+        question="복잡한 질문",
+        session_id=initial_session.get_session_id(),
+    )
+    await consumer._process(message)
+
+    # 취소로 인해 1개 토큰만 publish_token 되고 이후 토큰은 중단됨
+    token_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "token"
+    ]
+    assert len(token_calls) == 1
+    assert token_calls[0].args[1]["data"] == "첫번째 토큰 "
+
+
+
 
 
