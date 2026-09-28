@@ -738,4 +738,76 @@ async def test_agentic_ask_multi_iteration_pii_masked_in_later_rounds(
     assert "[REDACTED_KR_PHONE]" in doc2_source["snippet"]
 
 
+@pytest.mark.asyncio
+async def test_agentic_ask_multi_iteration_same_chunk_lower_score_does_not_reemit_sources(
+    mock_hybrid_search: AsyncMock,
+    mock_llm_gateway: MagicMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    # 1회차: doc-1 (chunk 0, score=0.9)
+    # 2회차: doc-1 (chunk 0, score=0.7) - 점수가 더 낮아서 출처 목록 갱신 없음
+    chunk1_v1 = SimilaritySearchResult(
+        text="문서 1 내용",
+        score=0.9,
+        metadata=VectorDocumentMetadata(
+            document_id="doc-1",
+            file_name="doc1.pdf",
+            chunk_index=0,
+        ),
+    )
+    chunk1_v2 = SimilaritySearchResult(
+        text="문서 1 내용",
+        score=0.7,
+        metadata=VectorDocumentMetadata(
+            document_id="doc-1",
+            file_name="doc1.pdf",
+            chunk_index=0,
+        ),
+    )
+
+    mock_hybrid_search.execute.side_effect = [
+        HybridSearchResult(chunks=[chunk1_v1], query_embedding=[0.1, 0.2]),
+        HybridSearchResult(chunks=[chunk1_v2], query_embedding=[0.1, 0.2]),
+    ]
+
+    mock_critique_generator.generate.side_effect = [
+        Critique.of(answered=False, missing=["추가 정보"], next_query="추가 질문", confidence=0.4),
+        Critique.of(answered=True, missing=[], next_query="", confidence=0.9),
+    ]
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+    )
+
+    command = AgenticAskCommand(
+        question="낮은 점수 중복 청크 미방출 테스트",
+        budget=IterationBudget.of(max_iterations=3, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+    )
+
+    yielded_items = [item async for item in use_case.execute(command)]
+    source_events = [
+        json.loads(item[len("__SOURCES:") :])
+        for item in yielded_items
+        if item.startswith("__SOURCES:")
+    ]
+
+    # 1회차에만 방출되고 2회차에는 출처 갱신이 없으므로 재방출되지 않음
+    assert len(source_events) == 1
+    assert len(source_events[0]) == 1
+    assert source_events[0][0]["documentId"] == "doc-1"
+    assert source_events[0][0]["score"] == 0.9
+
+
+
 
