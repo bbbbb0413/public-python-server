@@ -4,6 +4,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import Any
 
 from ai_service.knowledge.schemas import SimilaritySearchResult
 from ai_service.llm_gateway.application.llm_gateway_service import LlmGatewayService
@@ -59,6 +60,7 @@ class AgenticAskUseCase:
         start_time = time.monotonic()
         current_query = command.question
         tokens_used = 0
+        accumulated_sources: dict[str, dict[str, Any]] = {}
 
         iteration = 1
         last_confidence = 0.0
@@ -75,18 +77,24 @@ class AgenticAskUseCase:
             )
             chunks = hybrid_result.chunks
 
-            if iteration == 1 and chunks:
-                sources = [
-                    {
+            sources_updated = False
+            for c in chunks:
+                key = f"{c.metadata.document_id}:{c.metadata.chunk_index}"
+                if key not in accumulated_sources:
+                    accumulated_sources[key] = {
                         "fileName": c.metadata.file_name,
                         "chunkIndex": c.metadata.chunk_index,
                         "documentId": c.metadata.document_id,
                         "snippet": self._format_snippet(c.text),
                         "score": c.score,
                     }
-                    for c in chunks
-                ]
-                yield f"__SOURCES:{json.dumps(sources)}"
+                    sources_updated = True
+                elif c.score > accumulated_sources[key]["score"]:
+                    accumulated_sources[key]["score"] = c.score
+                    sources_updated = True
+
+            if sources_updated:
+                yield f"__SOURCES:{json.dumps(list(accumulated_sources.values()))}"
 
             await self._emit_progress(
                 callback, iteration, "generating", last_confidence, last_missing

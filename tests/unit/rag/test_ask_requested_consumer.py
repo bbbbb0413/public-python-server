@@ -561,5 +561,113 @@ async def test_ask_requested_consumer_complex_persists_confidence_and_missing_to
     assert updated_session.turns[1].missing == ["추가 설명"]
 
 
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_agentic_multi_iteration_publishes_accumulated_sources_and_saves_to_session():  # noqa: E501
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+
+    sources_turn1 = [
+        {
+            "fileName": "doc1.pdf",
+            "chunkIndex": 0,
+            "documentId": "doc-1",
+            "snippet": "내용1",
+            "score": 0.8,
+        }
+    ]
+    sources_turn2 = [
+        {
+            "fileName": "doc1.pdf",
+            "chunkIndex": 0,
+            "documentId": "doc-1",
+            "snippet": "내용1",
+            "score": 0.8,
+        },
+        {
+            "fileName": "doc2.pdf",
+            "chunkIndex": 1,
+            "documentId": "doc-2",
+            "snippet": "내용2",
+            "score": 0.9,
+        },
+    ]
+
+    agentic_use_case_mock = MagicMock(spec=AgenticAskUseCase)
+
+    async def fake_agentic_execute(command) -> AsyncIterator[str]:
+        if command.on_progress:
+            await command.on_progress(
+                {"iteration": 1, "phase": "searching", "confidence": 0.0, "missing": []}
+            )
+        yield f"__SOURCES:{json.dumps(sources_turn1)}"
+        if command.on_progress:
+            await command.on_progress(
+                {"iteration": 2, "phase": "searching", "confidence": 0.4, "missing": ["추가"]}
+            )
+        yield f"__SOURCES:{json.dumps(sources_turn2)}"
+        if command.on_progress:
+            await command.on_progress(
+                {"iteration": 2, "phase": "critiquing", "confidence": 0.95, "missing": []}
+            )
+        yield "최종 에이전틱 답변입니다."
+
+    agentic_use_case_mock.execute.side_effect = fake_agentic_execute
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "complex"
+
+    validator_mock = MagicMock(spec=RagContentValidator)
+    validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
+
+    initial_session = ConversationSession.create("user-1", "다회차 에이전틱 질문")
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
+    session_repo_mock.persist = AsyncMock(return_value=initial_session)
+    session_repo_mock.update = AsyncMock(return_value=initial_session)
+
+    composition = RagComposition(
+        ask_use_case=MagicMock(spec=AskUseCase),
+        agentic_ask_use_case=agentic_use_case_mock,
+        query_complexity_router=router_mock,
+        rag_validator=validator_mock,
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(3, 1000, 5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    message = AskRequestedMessage(
+        job_id="test-job-agentic-sources",
+        user_id="user-1",
+        question="다회차 에이전틱 질문",
+        session_id=initial_session.get_session_id(),
+    )
+    await consumer._process(message)
+
+    # sources redis 이벤트가 2회 발행되었는지 확인
+    source_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "sources"
+    ]
+    assert len(source_calls) == 2
+    assert json.loads(source_calls[0].args[1]["data"]) == sources_turn1
+    assert json.loads(source_calls[1].args[1]["data"]) == sources_turn2
+
+    # 세션 영속화 시 최종 2회차 누적 출처 목록이 저장되었는지 확인
+    session_repo_mock.update.assert_awaited_once()
+    updated_session = session_repo_mock.update.await_args[0][0]
+    assert len(updated_session.turns) == 2
+    assert updated_session.turns[1].sources == sources_turn2
+
+
 
 
