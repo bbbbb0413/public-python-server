@@ -326,3 +326,62 @@ async def test_ask_use_case_returns_zero_confidence_and_missing_when_no_chunks(
     assert len(progress_events) == 1
     assert progress_events[0]["confidence"] == 0.0
     assert progress_events[0]["missing"] == ["관련 지식베이스 문서를 찾지 못함"]
+
+
+@pytest.mark.asyncio
+async def test_ask_use_case_clamps_confidence_within_zero_to_one(
+    mock_llm_gateway: MagicMock,
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_llm_cache: AsyncMock,
+    mock_semantic_cache: AsyncMock,
+    settings: Settings,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+    mock_session_repo: AsyncMock,
+    mock_query_rewriter: AsyncMock,
+):
+    chunks = [
+        SimilaritySearchResult(
+            text="높은 점수 문서",
+            score=1.5,
+            metadata=VectorDocumentMetadata(
+                document_id="doc-high",
+                file_name="high.pdf",
+                chunk_index=0,
+            ),
+        ),
+    ]
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=chunks,
+        query_embedding=[0.1, 0.2],
+    )
+
+    use_case = AskUseCase(
+        llm_gateway=mock_llm_gateway,
+        hybrid_search=mock_hybrid_search,
+        get_active_prompt=mock_get_active_prompt,
+        llm_cache=mock_llm_cache,
+        semantic_cache=mock_semantic_cache,
+        settings=settings,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=mock_session_repo,
+        query_rewriter=mock_query_rewriter,
+    )
+
+    progress_events = []
+
+    async def on_progress(data: dict) -> None:
+        progress_events.append(data)
+
+    command = AskCommand(question="클램핑 질문", on_progress=on_progress)
+    results = [chunk async for chunk in use_case.execute(command)]
+
+    grounding_chunks = [r for r in results if r.startswith("__GROUNDING:")]
+    assert len(grounding_chunks) == 1
+    grounding_data = json.loads(grounding_chunks[0][len("__GROUNDING:") :])
+    assert grounding_data["confidence"] == 1.0
+    assert grounding_data["missing"] == []
+    assert progress_events[0]["confidence"] == 1.0
+
