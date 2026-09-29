@@ -1,5 +1,7 @@
 import hashlib
+import inspect
 import json
+import logging
 import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -10,7 +12,7 @@ from ai_service.knowledge.schemas import SimilaritySearchResult
 from ai_service.llm_gateway.application.llm_gateway_service import LlmGatewayService
 from ai_service.llm_gateway.schemas import GatewayCallCommand, LlmMessage
 from ai_service.prompt.service import PromptService
-from ai_service.rag.application.ask_command import AskCommand
+from ai_service.rag.application.ask_command import AskCommand, ProgressCallback
 from ai_service.rag.application.command.hybrid_search_command import HybridSearchCommand
 from ai_service.rag.application.conversational_query_rewriter_service import (
     ConversationalQueryRewriter,
@@ -20,6 +22,8 @@ from ai_service.rag.application.filter.secret_pii_scanner import SecretPiiScanne
 from ai_service.rag.application.hybrid_search_use_case import HybridSearchUseCase
 from ai_service.rag.repository import ConversationSessionRepository
 from ai_service.rag.schemas import SimilarityThreshold
+
+logger = logging.getLogger(__name__)
 
 RAG_PROMPT_NAME = "rag-qa-system"
 DEFAULT_TENANT = "default"
@@ -94,6 +98,8 @@ class AskUseCase:
         chunks = hybrid_result.chunks
 
         if chunks:
+            confidence = round(max(0.0, min(1.0, float(max(c.score for c in chunks)))), 2)
+            missing: list[str] = []
             sources = [
                 {
                     "fileName": c.metadata.file_name,
@@ -105,6 +111,16 @@ class AskUseCase:
                 for c in chunks
             ]
             yield f"__SOURCES:{json.dumps(sources)}"
+        else:
+            confidence = 0.0
+            missing = ["관련 지식베이스 문서를 찾지 못함"]
+
+        grounding_data = {
+            "confidence": confidence,
+            "missing": missing,
+        }
+        await self._emit_progress(command.on_progress, grounding_data)
+        yield f"__GROUNDING:{json.dumps(grounding_data)}"
 
         cache_key = self._build_cache_key(command.question, chunks)
         cached = await self._llm_cache.get(cache_key)
@@ -209,4 +225,18 @@ class AskUseCase:
         if len(masked) > MAX_SNIPPET_LENGTH:
             return masked[:MAX_SNIPPET_LENGTH] + "..."
         return masked
+
+    @staticmethod
+    async def _emit_progress(
+        callback: ProgressCallback | None,
+        payload: dict[str, Any],
+    ) -> None:
+        if callback is None:
+            return
+        try:
+            res = callback(payload)
+            if inspect.isawaitable(res):
+                await res
+        except Exception:
+            logger.warning("AskUseCase progress 발행 실패: %s", payload, exc_info=True)
 

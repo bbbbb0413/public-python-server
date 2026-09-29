@@ -70,10 +70,6 @@ async def test_create_rejects_invalid_name(shared_repo) -> None:  # type: ignore
     assert response.status_code == 422
 
 
-async def test_list_prompts_isolation_by_user_id(shared_repo) -> None:  # type: ignore[no-untyped-def]
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # Create global v1
 async def test_list_versions_user_isolation(shared_repo) -> None:  # type: ignore[no-untyped-def]
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -126,19 +122,32 @@ async def test_list_prompts_when_only_user_prompts_exist(shared_repo) -> None:  
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # Create user-A v1
-        # 1. user-A should see global-v1 + userA-v2, but NOT userB-v3
-        resp_a = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
-        assert resp_a.status_code == 200
-        data_a = resp_a.json()
-        versions_a = [item["version"] for item in data_a]
-        assert set(versions_a) == {1, 2}
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "user-a-v1",
+                "variables": ["context"],
+                "userId": "user-A",
+            },
+        )
+        # Create user-B v2
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "user-b-v2",
+                "variables": ["context"],
+                "userId": "user-B",
+            },
+        )
 
-        # 2. No userId query param should return only global-v1
-        resp_anon = await client.get("/prompts/rag-qa-system")
-        assert resp_anon.status_code == 200
-        data_anon = resp_anon.json()
-        versions_anon = [item["version"] for item in data_anon]
-        assert versions_anon == [1]
+        res = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
+        assert res.status_code == 200
+        items = res.json()
+        assert len(items) == 1
+        assert items[0]["version"] == 1
+        assert items[0]["userId"] == "user-A"
 
 
 async def test_list_versions_when_no_global_prompt_exists(shared_repo) -> None:  # type: ignore[no-untyped-def]

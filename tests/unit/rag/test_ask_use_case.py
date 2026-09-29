@@ -198,3 +198,131 @@ async def test_ask_use_case_sources_include_snippet_and_mask_pii(
     assert sources[2]["fileName"] == "long_doc.pdf"
     assert len(sources[2]["snippet"]) == 303
     assert sources[2]["snippet"] == "A" * 300 + "..."
+
+
+@pytest.mark.asyncio
+async def test_ask_use_case_calculates_confidence_when_chunks_exist(
+    mock_llm_gateway: MagicMock,
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_llm_cache: AsyncMock,
+    mock_semantic_cache: AsyncMock,
+    settings: Settings,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+    mock_session_repo: AsyncMock,
+    mock_query_rewriter: AsyncMock,
+):
+    chunks = [
+        SimilaritySearchResult(
+            text="문서 1",
+            score=0.85,
+            metadata=VectorDocumentMetadata(
+                document_id="doc-1",
+                file_name="guide.pdf",
+                chunk_index=0,
+            ),
+        ),
+        SimilaritySearchResult(
+            text="문서 2",
+            score=0.72,
+            metadata=VectorDocumentMetadata(
+                document_id="doc-2",
+                file_name="guide2.pdf",
+                chunk_index=0,
+            ),
+        ),
+    ]
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=chunks,
+        query_embedding=[0.1, 0.2],
+    )
+
+    use_case = AskUseCase(
+        llm_gateway=mock_llm_gateway,
+        hybrid_search=mock_hybrid_search,
+        get_active_prompt=mock_get_active_prompt,
+        llm_cache=mock_llm_cache,
+        semantic_cache=mock_semantic_cache,
+        settings=settings,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=mock_session_repo,
+        query_rewriter=mock_query_rewriter,
+    )
+
+    progress_events = []
+
+    async def on_progress(data: dict) -> None:
+        progress_events.append(data)
+
+    command = AskCommand(question="질문입니다", on_progress=on_progress)
+    results = [chunk async for chunk in use_case.execute(command)]
+
+    # 스트림 내 __GROUNDING: 접두사 확인
+    grounding_chunks = [r for r in results if r.startswith("__GROUNDING:")]
+    assert len(grounding_chunks) == 1
+    grounding_data = json.loads(grounding_chunks[0][len("__GROUNDING:") :])
+    assert grounding_data["confidence"] == 0.85
+    assert grounding_data["missing"] == []
+
+    # on_progress 콜백 호출 확인
+    assert len(progress_events) == 1
+    assert progress_events[0]["confidence"] == 0.85
+    assert progress_events[0]["missing"] == []
+
+
+@pytest.mark.asyncio
+async def test_ask_use_case_returns_zero_confidence_and_missing_when_no_chunks(
+    mock_llm_gateway: MagicMock,
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_llm_cache: AsyncMock,
+    mock_semantic_cache: AsyncMock,
+    settings: Settings,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+    mock_session_repo: AsyncMock,
+    mock_query_rewriter: AsyncMock,
+):
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=[],
+        query_embedding=[0.1, 0.2],
+    )
+
+    use_case = AskUseCase(
+        llm_gateway=mock_llm_gateway,
+        hybrid_search=mock_hybrid_search,
+        get_active_prompt=mock_get_active_prompt,
+        llm_cache=mock_llm_cache,
+        semantic_cache=mock_semantic_cache,
+        settings=settings,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=mock_session_repo,
+        query_rewriter=mock_query_rewriter,
+    )
+
+    progress_events = []
+
+    async def on_progress(data: dict) -> None:
+        progress_events.append(data)
+
+    command = AskCommand(question="검색 결과 없는 질문", on_progress=on_progress)
+    results = [chunk async for chunk in use_case.execute(command)]
+
+    # __SOURCES:는 생성되지 않아야 함
+    sources_chunks = [r for r in results if r.startswith("__SOURCES:")]
+    assert len(sources_chunks) == 0
+
+    # __GROUNDING:에 confidence 0.0과 누락 사유가 포함되어야 함
+    grounding_chunks = [r for r in results if r.startswith("__GROUNDING:")]
+    assert len(grounding_chunks) == 1
+    grounding_data = json.loads(grounding_chunks[0][len("__GROUNDING:") :])
+    assert grounding_data["confidence"] == 0.0
+    assert grounding_data["missing"] == ["관련 지식베이스 문서를 찾지 못함"]
+
+    # on_progress 콜백 호출 확인
+    assert len(progress_events) == 1
+    assert progress_events[0]["confidence"] == 0.0
+    assert progress_events[0]["missing"] == ["관련 지식베이스 문서를 찾지 못함"]

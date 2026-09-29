@@ -19,6 +19,7 @@ ASK_REQUESTED_TOPIC = "ai.rag.ask.requested"
 CONSUMER_GROUP_ID = "ai-service-rag"
 
 _SOURCES_PREFIX = "__SOURCES:"
+_GROUNDING_PREFIX = "__GROUNDING:"
 _DEFAULT_ASK_TOP_K = 15
 _DEFAULT_AGENTIC_TOP_K = 5
 
@@ -142,6 +143,14 @@ class AskRequestedConsumer:
             await self._publisher.publish_progress(
                 message.job_id, {"iteration": 0, "phase": "searching"}
             )
+
+            async def on_simple_progress(data: dict[str, Any]) -> None:
+                nonlocal last_confidence, last_missing
+                if "confidence" in data:
+                    last_confidence = data["confidence"]
+                if "missing" in data:
+                    last_missing = data["missing"]
+
             stream = composition.ask_use_case.execute(
                 AskCommand(
                     question=message.question,
@@ -150,6 +159,7 @@ class AskRequestedConsumer:
                     user_id=message.user_id,
                     conversation_history=message.conversation_history,
                     session_id=session.get_session_id() if session else None,
+                    on_progress=on_simple_progress,
                 )
             )
 
@@ -172,6 +182,12 @@ class AskRequestedConsumer:
                         message.job_id, {"iteration": 0, "phase": "generating"}
                     )
                     generating_announced = True
+            elif chunk.startswith(_GROUNDING_PREFIX):
+                grounding = json.loads(chunk[len(_GROUNDING_PREFIX) :])
+                if "confidence" in grounding:
+                    last_confidence = grounding["confidence"]
+                if "missing" in grounding:
+                    last_missing = grounding["missing"]
             else:
                 if not generating_announced:
                     await self._publisher.publish_progress(
