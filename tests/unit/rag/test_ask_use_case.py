@@ -198,3 +198,110 @@ async def test_ask_use_case_sources_include_snippet_and_mask_pii(
     assert sources[2]["fileName"] == "long_doc.pdf"
     assert len(sources[2]["snippet"]) == 303
     assert sources[2]["snippet"] == "A" * 300 + "..."
+
+
+@pytest.mark.asyncio
+async def test_ask_use_case_emits_confidence_metadata_when_chunks_exist(
+    mock_llm_gateway: MagicMock,
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_llm_cache: AsyncMock,
+    mock_semantic_cache: AsyncMock,
+    settings: Settings,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+    mock_session_repo: AsyncMock,
+    mock_query_rewriter: AsyncMock,
+):
+    chunks = [
+        SimilaritySearchResult(
+            text="첫 번째 청크 본문입니다.",
+            score=0.75,
+            metadata=VectorDocumentMetadata(
+                document_id="doc-1",
+                file_name="doc1.pdf",
+                chunk_index=0,
+            ),
+        ),
+        SimilaritySearchResult(
+            text="두 번째 청크 본문입니다.",
+            score=0.92,
+            metadata=VectorDocumentMetadata(
+                document_id="doc-2",
+                file_name="doc2.pdf",
+                chunk_index=0,
+            ),
+        ),
+    ]
+
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=chunks,
+        query_embedding=[0.1, 0.2],
+    )
+
+    use_case = AskUseCase(
+        llm_gateway=mock_llm_gateway,
+        hybrid_search=mock_hybrid_search,
+        get_active_prompt=mock_get_active_prompt,
+        llm_cache=mock_llm_cache,
+        semantic_cache=mock_semantic_cache,
+        settings=settings,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=mock_session_repo,
+        query_rewriter=mock_query_rewriter,
+    )
+
+    command = AskCommand(question="신뢰도 테스트 질문")
+    results = [chunk async for chunk in use_case.execute(command)]
+
+    # results should contain __SOURCES:... and __CONFIDENCE:...
+    assert results[0].startswith("__SOURCES:")
+    assert results[1].startswith("__CONFIDENCE:")
+
+    confidence_data = json.loads(results[1][len("__CONFIDENCE:") :])
+    assert confidence_data["confidence"] == 0.92
+    assert confidence_data["missing"] == []
+
+
+@pytest.mark.asyncio
+async def test_ask_use_case_emits_zero_confidence_and_missing_when_no_chunks(
+    mock_llm_gateway: MagicMock,
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_llm_cache: AsyncMock,
+    mock_semantic_cache: AsyncMock,
+    settings: Settings,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+    mock_session_repo: AsyncMock,
+    mock_query_rewriter: AsyncMock,
+):
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=[],
+        query_embedding=[0.1, 0.2],
+    )
+
+    use_case = AskUseCase(
+        llm_gateway=mock_llm_gateway,
+        hybrid_search=mock_hybrid_search,
+        get_active_prompt=mock_get_active_prompt,
+        llm_cache=mock_llm_cache,
+        semantic_cache=mock_semantic_cache,
+        settings=settings,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=mock_session_repo,
+        query_rewriter=mock_query_rewriter,
+    )
+
+    command = AskCommand(question="문서 없는 질문")
+    results = [chunk async for chunk in use_case.execute(command)]
+
+    # When no chunks, __CONFIDENCE with 0.0 and missing info should be emitted first (no __SOURCES)
+    assert len(results) > 0
+    assert results[0].startswith("__CONFIDENCE:")
+
+    confidence_data = json.loads(results[0][len("__CONFIDENCE:") :])
+    assert confidence_data["confidence"] == 0.0
+    assert confidence_data["missing"] == ["관련 지식베이스 문서를 찾지 못함"]

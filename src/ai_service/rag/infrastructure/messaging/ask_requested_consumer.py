@@ -19,6 +19,7 @@ ASK_REQUESTED_TOPIC = "ai.rag.ask.requested"
 CONSUMER_GROUP_ID = "ai-service-rag"
 
 _SOURCES_PREFIX = "__SOURCES:"
+_CONFIDENCE_PREFIX = "__CONFIDENCE:"
 _DEFAULT_ASK_TOP_K = 15
 _DEFAULT_AGENTIC_TOP_K = 5
 
@@ -172,6 +173,12 @@ class AskRequestedConsumer:
                         message.job_id, {"iteration": 0, "phase": "generating"}
                     )
                     generating_announced = True
+            elif chunk.startswith(_CONFIDENCE_PREFIX):
+                conf_data = json.loads(chunk[len(_CONFIDENCE_PREFIX) :])
+                if "confidence" in conf_data:
+                    last_confidence = conf_data["confidence"]
+                if "missing" in conf_data:
+                    last_missing = conf_data["missing"]
             else:
                 if not generating_announced:
                     await self._publisher.publish_progress(
