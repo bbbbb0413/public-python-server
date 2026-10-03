@@ -19,6 +19,7 @@ ASK_REQUESTED_TOPIC = "ai.rag.ask.requested"
 CONSUMER_GROUP_ID = "ai-service-rag"
 
 _SOURCES_PREFIX = "__SOURCES:"
+_METADATA_PREFIX = "__METADATA:"
 _DEFAULT_ASK_TOP_K = 15
 _DEFAULT_AGENTIC_TOP_K = 5
 
@@ -136,9 +137,14 @@ class AskRequestedConsumer:
                 )
             )
         else:
-            # 에이전틱 경로와 달리 단순 질문 경로는 자체 진행 이벤트가 없었다.
-            # 검색(리트리버 호출)이 끝나기 전까지 아무 신호도 없어 프론트가
-            # "검색 중" 표시를 못 하던 문제를 여기서 최소한으로 보강한다.
+            async def on_progress(data: dict[str, Any]) -> None:
+                nonlocal last_confidence, last_missing
+                if "confidence" in data:
+                    last_confidence = data["confidence"]
+                if "missing" in data:
+                    last_missing = data["missing"]
+                await self._publisher.publish_progress(message.job_id, data)
+
             await self._publisher.publish_progress(
                 message.job_id, {"iteration": 0, "phase": "searching"}
             )
@@ -150,6 +156,7 @@ class AskRequestedConsumer:
                     user_id=message.user_id,
                     conversation_history=message.conversation_history,
                     session_id=session.get_session_id() if session else None,
+                    on_progress=on_progress,
                 )
             )
 
@@ -172,6 +179,12 @@ class AskRequestedConsumer:
                         message.job_id, {"iteration": 0, "phase": "generating"}
                     )
                     generating_announced = True
+            elif chunk.startswith(_METADATA_PREFIX):
+                metadata = json.loads(chunk[len(_METADATA_PREFIX) :])
+                if "confidence" in metadata:
+                    last_confidence = metadata["confidence"]
+                if "missing" in metadata:
+                    last_missing = metadata["missing"]
             else:
                 if not generating_announced:
                     await self._publisher.publish_progress(
