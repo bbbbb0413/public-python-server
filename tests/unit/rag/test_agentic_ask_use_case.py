@@ -458,3 +458,177 @@ async def test_agentic_ask_fallback_critique_triggers_refining(
     assert mock_query_refiner.refine.call_count == 1
 
 
+@pytest.mark.asyncio
+async def test_agentic_ask_multi_turn_sources_accumulate_and_deduplicate(
+    mock_hybrid_search: AsyncMock,
+    mock_llm_gateway: MagicMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    # 1회차: 만족 못함 -> 문서 A(청크 0, 점수 0.75) 검색
+    # 2회차: 만족 못함 -> 문서 A(점수 0.88 갱신) + 문서 B(청크 1, 0.80 신규) 검색
+    # 3회차: 만족함 -> 검색 결과 없음 (chunks=[])
+    mock_critique_generator.generate.side_effect = [
+        Critique.of(answered=False, missing=["추가 정보 1"], next_query="질의 2", confidence=0.4),
+        Critique.of(answered=False, missing=["추가 정보 2"], next_query="질의 3", confidence=0.7),
+        Critique.of(answered=True, missing=[], next_query="", confidence=0.95),
+    ]
+
+    chunk_a1 = SimilaritySearchResult(
+        text="문서 A 본문입니다. 연락처: 010-9999-8888",
+        score=0.75,
+        metadata=VectorDocumentMetadata(
+            document_id="doc-A",
+            file_name="doc_a.pdf",
+            chunk_index=0,
+        ),
+    )
+    chunk_a2_higher_score = SimilaritySearchResult(
+        text="문서 A 본문입니다. 연락처: 010-9999-8888",
+        score=0.88,
+        metadata=VectorDocumentMetadata(
+            document_id="doc-A",
+            file_name="doc_a.pdf",
+            chunk_index=0,
+        ),
+    )
+    chunk_b = SimilaritySearchResult(
+        text="문서 B 본문입니다.",
+        score=0.80,
+        metadata=VectorDocumentMetadata(
+            document_id="doc-B",
+            file_name="doc_b.pdf",
+            chunk_index=1,
+        ),
+    )
+
+    mock_hybrid_search.execute.side_effect = [
+        HybridSearchResult(chunks=[chunk_a1], query_embedding=[0.1]),
+        HybridSearchResult(chunks=[chunk_a2_higher_score, chunk_b], query_embedding=[0.2]),
+        HybridSearchResult(chunks=[], query_embedding=[0.3]),
+    ]
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+    )
+
+    command = AgenticAskCommand(
+        question="다회차 출처 누적 테스트",
+        budget=IterationBudget.of(max_iterations=4, token_budget=2000, timeout_ms=5000),
+        confidence_threshold=0.9,
+    )
+
+    yielded_items = [item async for item in use_case.execute(command)]
+
+    # __SOURCES: 이벤트 추출
+    sources_events = [
+        json.loads(item[len("__SOURCES:") :])
+        for item in yielded_items
+        if item.startswith("__SOURCES:")
+    ]
+
+    # 1회차: doc-A (score: 0.75) 방출
+    # 2회차: doc-A (score: 0.88로 갱신) + doc-B (신규) 방출
+    # 3회차: chunks=[] 이므로 새로운 __SOURCES 방출 없음 (총 2회 방출)
+    assert len(sources_events) == 2
+
+    # 1회차 검증
+    assert len(sources_events[0]) == 1
+    assert sources_events[0][0]["documentId"] == "doc-A"
+    assert sources_events[0][0]["chunkIndex"] == 0
+    assert sources_events[0][0]["score"] == 0.75
+    assert "[REDACTED_KR_PHONE]" in sources_events[0][0]["snippet"]
+
+    # 2회차 누적 및 중복 제거(최고점 반영) 검증
+    assert len(sources_events[1]) == 2
+    doc_a_source = next(s for s in sources_events[1] if s["documentId"] == "doc-A")
+    doc_b_source = next(s for s in sources_events[1] if s["documentId"] == "doc-B")
+
+    assert doc_a_source["score"] == 0.88
+    assert doc_a_source["chunkIndex"] == 0
+    assert doc_b_source["score"] == 0.80
+    assert doc_b_source["chunkIndex"] == 1
+    assert doc_b_source["fileName"] == "doc_b.pdf"
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_multi_turn_lower_score_does_not_override_or_emit(
+    mock_hybrid_search: AsyncMock,
+    mock_llm_gateway: MagicMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    # 1회차: 문서 A(청크 0, score 0.9)
+    # 2회차: 문서 A(청크 0, score 0.7) - 점수가 더 낮음
+    mock_critique_generator.generate.side_effect = [
+        Critique.of(answered=False, missing=["추가 정보"], next_query="질의 2", confidence=0.5),
+        Critique.of(answered=True, missing=[], next_query="", confidence=0.95),
+    ]
+
+    chunk_a_high = SimilaritySearchResult(
+        text="문서 A 본문",
+        score=0.9,
+        metadata=VectorDocumentMetadata(
+            document_id="doc-A",
+            file_name="doc_a.pdf",
+            chunk_index=0,
+        ),
+    )
+    chunk_a_low = SimilaritySearchResult(
+        text="문서 A 본문",
+        score=0.7,
+        metadata=VectorDocumentMetadata(
+            document_id="doc-A",
+            file_name="doc_a.pdf",
+            chunk_index=0,
+        ),
+    )
+
+    mock_hybrid_search.execute.side_effect = [
+        HybridSearchResult(chunks=[chunk_a_high], query_embedding=[0.1]),
+        HybridSearchResult(chunks=[chunk_a_low], query_embedding=[0.2]),
+    ]
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+    )
+
+    command = AgenticAskCommand(
+        question="동일 문서 낮은 점수 재검색 테스트",
+        budget=IterationBudget.of(max_iterations=3, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+    )
+
+    yielded_items = [item async for item in use_case.execute(command)]
+
+    sources_events = [
+        json.loads(item[len("__SOURCES:") :])
+        for item in yielded_items
+        if item.startswith("__SOURCES:")
+    ]
+
+    # 1회차만 방출되고 2회차에서는 점수가 낮아 갱신되지 않으므로 방출되지 않음 (총 1회)
+    assert len(sources_events) == 1
+    assert sources_events[0][0]["score"] == 0.9
+
+
+
+
