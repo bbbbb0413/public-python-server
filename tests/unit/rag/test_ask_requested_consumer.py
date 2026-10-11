@@ -177,33 +177,45 @@ async def test_ask_requested_consumer_simple_publishes_searching_and_generating_
         "phase": "generating",
     }
 
-    # redis xadd 호출 확인: done 이벤트가 메타데이터 없이 발행되었는지
+    # redis xadd 호출 확인: done 이벤트가 메타데이터와 함께 발행되었는지
     done_calls = [
         call
         for call in redis_mock.xadd.await_args_list
         if call.args[1].get("type") == "done"
     ]
     assert len(done_calls) == 1
-    assert "data" not in done_calls[0].args[1]
 
 
 @pytest.mark.asyncio
-async def test_ask_requested_consumer_appends_sources_to_session():
+async def test_ask_requested_consumer_simple_publishes_done_and_saves_session_with_metadata():
     redis_mock = MagicMock(spec=Redis)
     redis_mock.xadd = AsyncMock()
     redis_mock.get = AsyncMock(return_value=None)
 
     sources_data = [
-        {"fileName": "test.pdf", "chunkIndex": 0, "documentId": "doc-1", "snippet": "테스트 요약"}
+        {
+            "fileName": "test.pdf",
+            "chunkIndex": 0,
+            "documentId": "doc-1",
+            "snippet": "테스트 요약",
+            "score": 0.85,
+        }
     ]
 
     ask_use_case_mock = MagicMock(spec=AskUseCase)
 
     async def fake_ask_execute(_command) -> AsyncIterator[str]:
         yield f"__SOURCES:{json.dumps(sources_data)}"
+        yield json.dumps({"confidence": 0.85, "missing": []})
         yield "답변입니다."
 
-    ask_use_case_mock.execute.side_effect = fake_ask_execute
+    # AskUseCase yields __SOURCES:..., __METADATA:..., and then text
+    async def fake_ask_execute_with_meta(_command) -> AsyncIterator[str]:
+        yield f"__SOURCES:{json.dumps(sources_data)}"
+        yield f"__METADATA:{json.dumps({'confidence': 0.85, 'missing': []})}"
+        yield "답변입니다."
+
+    ask_use_case_mock.execute.side_effect = fake_ask_execute_with_meta
 
     router_mock = MagicMock(spec=QueryComplexityRouter)
     router_mock.route.return_value = "simple"
@@ -236,7 +248,7 @@ async def test_ask_requested_consumer_appends_sources_to_session():
     consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
 
     message = AskRequestedMessage(
-        job_id="test-job-999",
+        job_id="test-job-simple-meta",
         user_id="user-1",
         question="질문입니다",
         session_id=initial_session.get_session_id(),
@@ -250,8 +262,95 @@ async def test_ask_requested_consumer_appends_sources_to_session():
     assert updated_session.turns[1].role == "assistant"
     assert updated_session.turns[1].content == "답변입니다."
     assert updated_session.turns[1].sources == sources_data
-    assert updated_session.turns[1].confidence is None
-    assert updated_session.turns[1].missing is None
+    assert updated_session.turns[1].confidence == 0.85
+    assert updated_session.turns[1].missing == []
+
+    # redis xadd 호출 확인: done 이벤트 검증
+    done_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "done"
+    ]
+    assert len(done_calls) == 1
+    assert "data" in done_calls[0].args[1]
+    done_data = json.loads(done_calls[0].args[1]["data"])
+    assert done_data == {"confidence": 0.85, "missing": []}
+
+
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_simple_no_chunks_metadata():
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+
+    ask_use_case_mock = MagicMock(spec=AskUseCase)
+
+    async def fake_ask_execute_no_chunks(_command) -> AsyncIterator[str]:
+        no_chunk_meta = {"confidence": 0.0, "missing": ["관련 지식베이스 문서를 찾지 못함"]}
+        yield f"__METADATA:{json.dumps(no_chunk_meta)}"
+        yield "답변입니다."
+
+    ask_use_case_mock.execute.side_effect = fake_ask_execute_no_chunks
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "simple"
+
+    validator_mock = MagicMock(spec=RagContentValidator)
+    validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
+
+    initial_session = ConversationSession.create("user-1", "질문입니다")
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
+    session_repo_mock.persist = AsyncMock(return_value=initial_session)
+    session_repo_mock.update = AsyncMock(return_value=initial_session)
+
+    composition = RagComposition(
+        ask_use_case=ask_use_case_mock,
+        agentic_ask_use_case=MagicMock(spec=AgenticAskUseCase),
+        query_complexity_router=router_mock,
+        rag_validator=validator_mock,
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(3, 1000, 5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    message = AskRequestedMessage(
+        job_id="test-job-simple-no-chunks",
+        user_id="user-1",
+        question="질문입니다",
+        session_id=initial_session.get_session_id(),
+    )
+    await consumer._process(message)
+
+    # session_repo.update 호출 인자 검증
+    session_repo_mock.update.assert_awaited_once()
+    updated_session = session_repo_mock.update.await_args[0][0]
+    assert len(updated_session.turns) == 2
+    assert updated_session.turns[1].role == "assistant"
+    assert updated_session.turns[1].content == "답변입니다."
+    assert updated_session.turns[1].sources is None
+    assert updated_session.turns[1].confidence == 0.0
+    assert updated_session.turns[1].missing == ["관련 지식베이스 문서를 찾지 못함"]
+
+    # done 이벤트 검증
+    done_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "done"
+    ]
+    assert len(done_calls) == 1
+    assert "data" in done_calls[0].args[1]
+    done_data = json.loads(done_calls[0].args[1]["data"])
+    assert done_data == {"confidence": 0.0, "missing": ["관련 지식베이스 문서를 찾지 못함"]}
+
 
 
 @pytest.mark.asyncio
