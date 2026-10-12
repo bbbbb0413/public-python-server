@@ -177,7 +177,7 @@ async def test_ask_requested_consumer_simple_publishes_searching_and_generating_
         "phase": "generating",
     }
 
-    # redis xadd 호출 확인: done 이벤트가 메타데이터 없이 발행되었는지
+    # redis xadd 호출 확인: done 이벤트에 metadata가 없을 때
     done_calls = [
         call
         for call in redis_mock.xadd.await_args_list
@@ -201,6 +201,7 @@ async def test_ask_requested_consumer_appends_sources_to_session():
 
     async def fake_ask_execute(_command) -> AsyncIterator[str]:
         yield f"__SOURCES:{json.dumps(sources_data)}"
+        yield f"__METADATA:{json.dumps({'confidence': 0.85, 'missing': []})}"
         yield "답변입니다."
 
     ask_use_case_mock.execute.side_effect = fake_ask_execute
@@ -250,8 +251,98 @@ async def test_ask_requested_consumer_appends_sources_to_session():
     assert updated_session.turns[1].role == "assistant"
     assert updated_session.turns[1].content == "답변입니다."
     assert updated_session.turns[1].sources == sources_data
-    assert updated_session.turns[1].confidence is None
-    assert updated_session.turns[1].missing is None
+    assert updated_session.turns[1].confidence == 0.85
+    assert updated_session.turns[1].missing == []
+
+    # redis xadd 호출 확인: done 이벤트에 confidence와 missing이 포함되어 발행되었는지
+    done_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "done"
+    ]
+    assert len(done_calls) == 1
+    assert json.loads(done_calls[0].args[1]["data"]) == {
+        "confidence": 0.85,
+        "missing": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_simple_without_chunks_persists_zero_confidence_and_missing():
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+
+    ask_use_case_mock = MagicMock(spec=AskUseCase)
+
+    async def fake_ask_execute(_command) -> AsyncIterator[str]:
+        metadata_payload = {"confidence": 0.0, "missing": ["관련 지식베이스 문서를 찾지 못함"]}
+        yield f"__METADATA:{json.dumps(metadata_payload)}"
+        yield "일반 지식 기반 답변입니다."
+
+    ask_use_case_mock.execute.side_effect = fake_ask_execute
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "simple"
+
+    validator_mock = MagicMock(spec=RagContentValidator)
+    validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
+
+    initial_session = ConversationSession.create("user-1", "문서에 없는 질문")
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
+    session_repo_mock.persist = AsyncMock(return_value=initial_session)
+    session_repo_mock.update = AsyncMock(return_value=initial_session)
+
+    composition = RagComposition(
+        ask_use_case=ask_use_case_mock,
+        agentic_ask_use_case=MagicMock(spec=AgenticAskUseCase),
+        query_complexity_router=router_mock,
+        rag_validator=validator_mock,
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(3, 1000, 5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    message = AskRequestedMessage(
+        job_id="test-job-empty-chunks",
+        user_id="user-1",
+        question="문서에 없는 질문",
+        session_id=initial_session.get_session_id(),
+    )
+    await consumer._process(message)
+
+    # session_repo.update 호출 인자 검증
+    session_repo_mock.update.assert_awaited_once()
+    updated_session = session_repo_mock.update.await_args[0][0]
+    assert len(updated_session.turns) == 2
+    assert updated_session.turns[1].role == "assistant"
+    assert updated_session.turns[1].content == "일반 지식 기반 답변입니다."
+    assert updated_session.turns[1].sources is None
+    assert updated_session.turns[1].confidence == 0.0
+    assert updated_session.turns[1].missing == ["관련 지식베이스 문서를 찾지 못함"]
+
+    # redis xadd 호출 확인: done 이벤트에 confidence=0.0 및 missing 포함
+    done_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "done"
+    ]
+    assert len(done_calls) == 1
+    assert json.loads(done_calls[0].args[1]["data"]) == {
+        "confidence": 0.0,
+        "missing": ["관련 지식베이스 문서를 찾지 못함"],
+    }
+
+
 
 
 @pytest.mark.asyncio
