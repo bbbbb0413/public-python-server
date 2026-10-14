@@ -161,19 +161,44 @@ async def test_없는_세션의_평가_삭제는_404() -> None:
 
 
 async def test_범위를_벗어난_턴의_평가_삭제는_404() -> None:
-    service, _ = build()
+    service, repo = build()
+    await service.submit(submit_in(turn_index=1), OWNER)
 
     with pytest.raises(FeedbackError) as exc:
         await service.delete(SESSION, 9, OWNER)
 
     assert exc.value.status == 404
+    assert len(repo.storage) == 1
+
+
+async def test_음수_턴_인덱스의_평가_삭제_시도는_404() -> None:
+    service, repo = build()
+    await service.submit(submit_in(turn_index=1), OWNER)
+
+    with pytest.raises(FeedbackError) as exc:
+        await service.delete(SESSION, -1, OWNER)
+
+    assert exc.value.status == 404
+    assert len(repo.storage) == 1
+
+
+async def test_음수_턴_인덱스의_평가_제출_시도는_404() -> None:
+    service, repo = build()
+
+    with pytest.raises(FeedbackError) as exc:
+        await service._assert_answer_is_readable(SESSION, -1, OWNER)
+
+    assert exc.value.status == 404
 
 
 async def test_질문_턴의_평가_삭제_시도는_400() -> None:
-    service, _ = build()
+    service, repo = build()
+    await service.submit(submit_in(turn_index=1), OWNER)
 
     with pytest.raises(FeedbackError) as exc:
         await service.delete(SESSION, 0, OWNER)
 
     assert exc.value.status == 400
+    assert len(repo.storage) == 1
+
 

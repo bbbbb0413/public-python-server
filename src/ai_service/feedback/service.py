@@ -64,7 +64,7 @@ class FeedbackService:
         session = await self._assert_session_is_readable(session_id, user_id)
 
         turns = session.turns
-        if turn_index >= len(turns):
+        if turn_index < 0 or turn_index >= len(turns):
             raise FeedbackError("대상 답변을 찾을 수 없습니다.", 404)
         if turns[turn_index].role != "assistant":
             raise FeedbackError("답변이 아닌 턴에는 평가를 남길 수 없습니다.", 400)
