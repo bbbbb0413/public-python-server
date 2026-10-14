@@ -52,6 +52,17 @@ class AnswerFeedbackRepository:
         records = await cursor.to_list(length=None)
         return [self._to_domain(r) for r in records]
 
+    async def delete(self, session_id: str, turn_index: int, user_id: str) -> bool:
+        """답변 평가 삭제.
+
+        `userId` 를 조건에 함께 넣어 다른 사용자의 평가를 지울 수 없게 한다.
+        """
+        result = await self._collection.delete_one(
+            {"sessionId": session_id, "turnIndex": turn_index, "userId": user_id}
+        )
+        return result.deleted_count > 0
+
+
     @staticmethod
     def _to_domain(record: dict[str, Any]) -> AnswerFeedback:
         return AnswerFeedback(

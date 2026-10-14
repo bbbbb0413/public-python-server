@@ -38,6 +38,11 @@ class FeedbackService:
         await self._assert_session_is_readable(session_id, user_id)
         return await self._repo.find_by_session(session_id, user_id)
 
+    async def delete(self, session_id: str, turn_index: int, user_id: str) -> None:
+        await self._assert_answer_is_readable(session_id, turn_index, user_id)
+        await self._repo.delete(session_id, turn_index, user_id)
+
+
     async def _assert_session_is_readable(self, session_id: str, user_id: str) -> Any:
         """세션 소유자만 통과시킨다.
 

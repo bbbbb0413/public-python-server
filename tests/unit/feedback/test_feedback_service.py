@@ -128,3 +128,52 @@ async def test_평가가_없으면_빈_목록() -> None:
     service, _ = build()
 
     assert await service.get_for_session(SESSION, OWNER) == []
+
+
+async def test_소유자는_자기_답변의_평가를_삭제할_수_있다() -> None:
+    service, repo = build()
+    await service.submit(submit_in(turn_index=1), OWNER)
+    assert len(repo.storage) == 1
+
+    await service.delete(SESSION, 1, OWNER)
+
+    assert repo.storage == {}
+
+
+async def test_남의_세션의_평가는_삭제할_수_없다() -> None:
+    service, repo = build()
+    await service.submit(submit_in(turn_index=1), OWNER)
+
+    with pytest.raises(FeedbackError) as exc:
+        await service.delete(SESSION, 1, OTHER)
+
+    assert exc.value.status == 404
+    assert len(repo.storage) == 1
+
+
+async def test_없는_세션의_평가_삭제는_404() -> None:
+    service, _ = build()
+
+    with pytest.raises(FeedbackError) as exc:
+        await service.delete("없는-세션", 1, OWNER)
+
+    assert exc.value.status == 404
+
+
+async def test_범위를_벗어난_턴의_평가_삭제는_404() -> None:
+    service, _ = build()
+
+    with pytest.raises(FeedbackError) as exc:
+        await service.delete(SESSION, 9, OWNER)
+
+    assert exc.value.status == 404
+
+
+async def test_질문_턴의_평가_삭제_시도는_400() -> None:
+    service, _ = build()
+
+    with pytest.raises(FeedbackError) as exc:
+        await service.delete(SESSION, 0, OWNER)
+
+    assert exc.value.status == 400
+
