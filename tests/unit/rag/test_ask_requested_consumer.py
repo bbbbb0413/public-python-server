@@ -718,6 +718,99 @@ async def test_ask_requested_consumer_simple_no_chunks_publishes_done_and_update
     assert updated_session.turns[1].missing == ["관련 지식베이스 문서를 찾지 못함"]
 
 
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_simple_creates_new_session_with_confidence_and_missing():
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+
+    ask_use_case_mock = MagicMock(spec=AskUseCase)
+
+    async def fake_ask_execute(_command) -> AsyncIterator[str]:
+        meta_payload = {
+            "confidence": 0.85,
+            "missing": [],
+        }
+        yield f"__METADATA:{json.dumps(meta_payload)}"
+        yield "새 세션 답변입니다."
+
+    ask_use_case_mock.execute.side_effect = fake_ask_execute
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "simple"
+
+    validator_mock = MagicMock(spec=RagContentValidator)
+    validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
+
+    # 신규 세션 생성 시나리오: session_id가 없어서 persist 후 update 호출
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    created_session_holder: list[ConversationSession] = []
+
+    async def fake_persist(sess: ConversationSession) -> ConversationSession:
+        created_session_holder.append(sess)
+        return sess
+
+    session_repo_mock.persist.side_effect = fake_persist
+    session_repo_mock.update = AsyncMock()
+
+    composition = RagComposition(
+        ask_use_case=ask_use_case_mock,
+        agentic_ask_use_case=MagicMock(spec=AgenticAskUseCase),
+        query_complexity_router=router_mock,
+        rag_validator=validator_mock,
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(3, 1000, 5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    # session_id 없는 신규 메시지
+    message = AskRequestedMessage(
+        job_id="test-job-new-session",
+        user_id="user-new",
+        question="첫 번째 질문",
+        session_id=None,
+    )
+    await consumer._process(message)
+
+    # 세션 생성이 호출되었는지 확인
+    session_repo_mock.persist.assert_awaited_once()
+    assert len(created_session_holder) == 1
+
+    # publish_session이 새 세션 ID로 발행되었는지 확인
+    session_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "session"
+    ]
+    assert len(session_calls) == 1
+    assert session_calls[0].args[1]["data"] == created_session_holder[0].get_session_id()
+
+    # done 이벤트 검증
+    done_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "done"
+    ]
+    assert len(done_calls) == 1
+    assert json.loads(done_calls[0].args[1]["data"]) == {"confidence": 0.85, "missing": []}
+
+    # session update에 confidence 0.85 및 missing [] 저장 검증
+    session_repo_mock.update.assert_awaited_once()
+    updated_session = session_repo_mock.update.await_args[0][0]
+    assert len(updated_session.turns) == 2
+    assert updated_session.turns[1].confidence == 0.85
+    assert updated_session.turns[1].missing == []
+
+
+
 
 
 

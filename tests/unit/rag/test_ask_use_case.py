@@ -304,3 +304,111 @@ async def test_ask_use_case_emits_metadata_with_zero_confidence_when_no_chunks(
     assert metadata["confidence"] == 0.0
     assert metadata["missing"] == ["관련 지식베이스 문서를 찾지 못함"]
 
+
+@pytest.mark.asyncio
+async def test_ask_use_case_emits_metadata_when_llm_cache_hits(
+    mock_llm_gateway: MagicMock,
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_llm_cache: AsyncMock,
+    mock_semantic_cache: AsyncMock,
+    settings: Settings,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+    mock_session_repo: AsyncMock,
+    mock_query_rewriter: AsyncMock,
+):
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=[],
+        query_embedding=[0.1, 0.2],
+    )
+    mock_llm_cache.get.return_value = "캐시된 답변 내용입니다."
+
+    use_case = AskUseCase(
+        llm_gateway=mock_llm_gateway,
+        hybrid_search=mock_hybrid_search,
+        get_active_prompt=mock_get_active_prompt,
+        llm_cache=mock_llm_cache,
+        semantic_cache=mock_semantic_cache,
+        settings=settings,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=mock_session_repo,
+        query_rewriter=mock_query_rewriter,
+    )
+
+    command = AskCommand(question="캐시 히트 테스트")
+    results = [chunk async for chunk in use_case.execute(command)]
+
+    # 캐시 히트 시에도 메타데이터가 먼저 yield되고 캐시된 답변이 뒤따라야 함
+    metadata_chunks = [c for c in results if c.startswith("__METADATA:")]
+    assert len(metadata_chunks) == 1
+    metadata = json.loads(metadata_chunks[0][len("__METADATA:") :])
+    assert metadata["confidence"] == 0.0
+    assert metadata["missing"] == ["관련 지식베이스 문서를 찾지 못함"]
+
+    # LLM 게이트웨이는 호출되지 않고 캐시된 답변이 반환되어야 함
+    mock_llm_gateway.stream.assert_not_called()
+    assert "캐시된 답변 내용입니다." in results
+
+
+@pytest.mark.asyncio
+async def test_ask_use_case_emits_sources_and_metadata_when_chunks_exist_and_llm_cache_hits(
+    mock_llm_gateway: MagicMock,
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_llm_cache: AsyncMock,
+    mock_semantic_cache: AsyncMock,
+    settings: Settings,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+    mock_session_repo: AsyncMock,
+    mock_query_rewriter: AsyncMock,
+):
+    chunks = [
+        SimilaritySearchResult(
+            text="캐시 테스트 문서 본문",
+            score=0.88,
+            metadata=VectorDocumentMetadata(
+                document_id="doc-cached",
+                file_name="cached.pdf",
+                chunk_index=0,
+            ),
+        ),
+    ]
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=chunks,
+        query_embedding=[0.1, 0.2],
+    )
+    mock_llm_cache.get.return_value = "캐시된 청크 답변입니다."
+
+    use_case = AskUseCase(
+        llm_gateway=mock_llm_gateway,
+        hybrid_search=mock_hybrid_search,
+        get_active_prompt=mock_get_active_prompt,
+        llm_cache=mock_llm_cache,
+        semantic_cache=mock_semantic_cache,
+        settings=settings,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=mock_session_repo,
+        query_rewriter=mock_query_rewriter,
+    )
+
+    command = AskCommand(question="청크 캐시 히트 테스트")
+    results = [chunk async for chunk in use_case.execute(command)]
+
+    # __SOURCES와 __METADATA가 둘 다 방출되고 캐시된 답변이 포함되어야 함
+    sources_chunks = [c for c in results if c.startswith("__SOURCES:")]
+    assert len(sources_chunks) == 1
+
+    metadata_chunks = [c for c in results if c.startswith("__METADATA:")]
+    assert len(metadata_chunks) == 1
+    metadata = json.loads(metadata_chunks[0][len("__METADATA:") :])
+    assert metadata["confidence"] == 0.88
+    assert metadata["missing"] == []
+
+    mock_llm_gateway.stream.assert_not_called()
+    assert "캐시된 청크 답변입니다." in results
+
+

@@ -81,6 +81,47 @@ async def test_get_session_returns_turns_with_metadata() -> None:
     assert body["turns"][1]["missing"] == ["예외 규정"]
 
 
+async def test_get_session_ungrounded_confidence_zero_returns_exact_metadata() -> None:
+    now = datetime.now(UTC)
+    props = RestoreProps(
+        session_id="session-ungrounded-001",
+        user_id="user-1",
+        title="근거 없는 세션",
+        turns=[
+            TurnRecord(role="user", content="문서 없는 질문", created_at=now),
+            TurnRecord(
+                role="assistant",
+                content="일반 모델 지식 답변입니다.",
+                created_at=now,
+                sources=[],
+                confidence=0.0,
+                missing=["관련 지식베이스 문서를 찾지 못함"],
+            ),
+        ],
+        created_at=now,
+        updated_at=now,
+    )
+    session = ConversationSession.restore(props)
+
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+    repo_mock.find_by_id_for_user = AsyncMock(return_value=session)
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/rag/sessions/session-ungrounded-001?userId=user-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sessionId"] == "session-ungrounded-001"
+    assert len(body["turns"]) == 2
+    assert body["turns"][1]["role"] == "assistant"
+    assert body["turns"][1]["content"] == "일반 모델 지식 답변입니다."
+    assert body["turns"][1]["sources"] == []
+    assert body["turns"][1]["confidence"] == 0.0
+    assert body["turns"][1]["missing"] == ["관련 지식베이스 문서를 찾지 못함"]
+
+
 async def test_get_session_legacy_data_returns_none_metadata() -> None:
     now = datetime.now(UTC)
     props = RestoreProps(
