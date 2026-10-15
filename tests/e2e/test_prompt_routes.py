@@ -70,10 +70,6 @@ async def test_create_rejects_invalid_name(shared_repo) -> None:  # type: ignore
     assert response.status_code == 422
 
 
-async def test_list_prompts_isolation_by_user_id(shared_repo) -> None:  # type: ignore[no-untyped-def]
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # Create global v1
 async def test_list_versions_user_isolation(shared_repo) -> None:  # type: ignore[no-untyped-def]
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -122,10 +118,7 @@ async def test_list_versions_user_isolation(shared_repo) -> None:  # type: ignor
         assert res_none.json() == []
 
 
-async def test_list_prompts_when_only_user_prompts_exist(shared_repo) -> None:  # type: ignore[no-untyped-def]
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # Create user-A v1
+
         # 1. user-A should see global-v1 + userA-v2, but NOT userB-v3
         resp_a = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
         assert resp_a.status_code == 200
