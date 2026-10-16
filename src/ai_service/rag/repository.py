@@ -104,6 +104,7 @@ class ConversationSessionRepository:
                         sources=t.get("sources"),
                         confidence=t.get("confidence"),
                         missing=t.get("missing"),
+                        iterations=t.get("iterations"),
                     )
                     for t in record["turns"]
                 ],
@@ -127,6 +128,8 @@ class ConversationSessionRepository:
                 turn_dict["confidence"] = t.confidence
             if t.missing is not None:
                 turn_dict["missing"] = t.missing
+            if t.iterations is not None:
+                turn_dict["iterations"] = t.iterations
             turns_data.append(turn_dict)
 
         return {

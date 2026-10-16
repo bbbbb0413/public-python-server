@@ -50,6 +50,7 @@ async def test_get_session_returns_turns_with_metadata() -> None:
                 sources=sources,
                 confidence=0.92,
                 missing=["예외 규정"],
+                iterations=2,
             ),
         ],
         created_at=now,
@@ -73,12 +74,14 @@ async def test_get_session_returns_turns_with_metadata() -> None:
     assert body["turns"][0]["sources"] is None
     assert body["turns"][0]["confidence"] is None
     assert body["turns"][0]["missing"] is None
+    assert body["turns"][0]["iterations"] is None
 
     assert body["turns"][1]["role"] == "assistant"
     assert body["turns"][1]["content"] == "환불 가능합니다."
     assert body["turns"][1]["sources"] == sources
     assert body["turns"][1]["confidence"] == 0.92
     assert body["turns"][1]["missing"] == ["예외 규정"]
+    assert body["turns"][1]["iterations"] == 2
 
 
 async def test_get_session_with_zero_confidence_and_ungrounded_warning() -> None:
@@ -120,6 +123,7 @@ async def test_get_session_with_zero_confidence_and_ungrounded_warning() -> None
     assert body["turns"][1]["sources"] is None
     assert body["turns"][1]["confidence"] == 0.0
     assert body["turns"][1]["missing"] == ["관련 지식베이스 문서를 찾지 못함"]
+    assert body["turns"][1]["iterations"] is None
 
 
 async def test_get_session_legacy_data_returns_none_metadata() -> None:
@@ -149,9 +153,11 @@ async def test_get_session_legacy_data_returns_none_metadata() -> None:
     body = response.json()
     assert body["sessionId"] == "session-legacy-123"
     assert len(body["turns"]) == 2
+    assert body["turns"][0]["iterations"] is None
     assert body["turns"][1]["sources"] is None
     assert body["turns"][1]["confidence"] is None
     assert body["turns"][1]["missing"] is None
+    assert body["turns"][1]["iterations"] is None
 
 
 async def test_get_session_not_found_returns_404() -> None:
