@@ -880,3 +880,104 @@ async def test_ask_requested_consumer_agentic_cancelled_stops_streaming():
     ]
     assert len(token_calls) == 1
     assert token_calls[0].args[1]["data"] == "첫번째 토큰 "
+
+
+async def test_ask_requested_consumer_complex_persists_latest_multi_turn_sources():
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+
+    agentic_use_case_mock = MagicMock(spec=AgenticAskUseCase)
+
+    async def fake_agentic_execute(command) -> AsyncIterator[str]:
+        # 1회차 출처 방출
+        sources_iter1 = [
+            {
+                "documentId": "doc-A",
+                "chunkIndex": 0,
+                "fileName": "a.pdf",
+                "snippet": "A",
+                "score": 0.7,
+            }
+        ]
+        yield f"__SOURCES:{json.dumps(sources_iter1)}"
+
+        # 2회차 출처 방출 (누적 및 갱신)
+        sources_iter2 = [
+            {
+                "documentId": "doc-A",
+                "chunkIndex": 0,
+                "fileName": "a.pdf",
+                "snippet": "A",
+                "score": 0.9,
+            },
+            {
+                "documentId": "doc-B",
+                "chunkIndex": 1,
+                "fileName": "b.pdf",
+                "snippet": "B",
+                "score": 0.8,
+            },
+        ]
+        yield f"__SOURCES:{json.dumps(sources_iter2)}"
+
+        yield "최종 다회차 답변입니다."
+
+    agentic_use_case_mock.execute.side_effect = fake_agentic_execute
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "complex"
+
+    validator_mock = MagicMock(spec=RagContentValidator)
+    validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
+
+    initial_session = ConversationSession.create("user-1", "복잡한 에이전틱 질문")
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
+    session_repo_mock.persist = AsyncMock(return_value=initial_session)
+    session_repo_mock.update = AsyncMock(return_value=initial_session)
+
+    composition = RagComposition(
+        ask_use_case=MagicMock(spec=AskUseCase),
+        agentic_ask_use_case=agentic_use_case_mock,
+        query_complexity_router=router_mock,
+        rag_validator=validator_mock,
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(3, 1000, 5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    message = AskRequestedMessage(
+        job_id="test-job-multi-sources",
+        user_id="user-1",
+        question="복잡한 에이전틱 질문",
+        session_id=initial_session.get_session_id(),
+    )
+    await consumer._process(message)
+
+    # sources redis 이벤트 발행 확인 (2회 발행되었는지)
+    sources_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "sources"
+    ]
+    assert len(sources_calls) == 2
+
+    # 세션에 최종 저장된 sources는 2회차 누적 출처 목록이어야 함
+    session_repo_mock.update.assert_awaited_once()
+    updated_session = session_repo_mock.update.await_args[0][0]
+    assert len(updated_session.turns) == 2
+    assistant_turn = updated_session.turns[1]
+    assert assistant_turn.sources is not None
+    assert len(assistant_turn.sources) == 2
+    assert assistant_turn.sources[0]["documentId"] == "doc-A"
+    assert assistant_turn.sources[0]["score"] == 0.9
+    assert assistant_turn.sources[1]["documentId"] == "doc-B"

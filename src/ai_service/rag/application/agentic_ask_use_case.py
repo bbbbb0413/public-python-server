@@ -4,6 +4,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import Any
 
 from ai_service.knowledge.schemas import SimilaritySearchResult
 from ai_service.llm_gateway.application.llm_gateway_service import LlmGatewayService
@@ -63,6 +64,7 @@ class AgenticAskUseCase:
         iteration = 1
         last_confidence = 0.0
         last_missing: list[str] = []
+        accumulated_sources: dict[tuple[str, int], dict[str, Any]] = {}
 
         while True:
             await self._emit_progress(
@@ -75,17 +77,26 @@ class AgenticAskUseCase:
             )
             chunks = hybrid_result.chunks
 
-            if iteration == 1 and chunks:
-                sources = [
-                    {
+            sources_updated = False
+            for c in chunks:
+                key = (c.metadata.document_id, c.metadata.chunk_index)
+                if key not in accumulated_sources:
+                    accumulated_sources[key] = {
                         "fileName": c.metadata.file_name,
                         "chunkIndex": c.metadata.chunk_index,
                         "documentId": c.metadata.document_id,
                         "snippet": self._format_snippet(c.text),
                         "score": c.score,
                     }
-                    for c in chunks
-                ]
+                    sources_updated = True
+                elif c.score > accumulated_sources[key]["score"]:
+                    accumulated_sources[key]["score"] = c.score
+                    accumulated_sources[key]["snippet"] = self._format_snippet(c.text)
+                    accumulated_sources[key]["fileName"] = c.metadata.file_name
+                    sources_updated = True
+
+            if sources_updated:
+                sources = list(accumulated_sources.values())
                 yield f"__SOURCES:{json.dumps(sources)}"
 
             await self._emit_progress(
