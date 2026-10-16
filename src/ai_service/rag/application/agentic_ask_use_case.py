@@ -103,25 +103,37 @@ class AgenticAskUseCase:
                 callback, iteration, "generating", last_confidence, last_missing
             )
 
+            if iteration > 1:
+                yield "\n\n"
+
             messages = await self._build_messages(
                 command.question, chunks, command.user_id, command.conversation_history
             )
-            collected = [
-                token
-                async for token in self._llm_gateway.stream(
-                    GatewayCallCommand(messages, RAG_PROMPT_NAME, tenant)
-                )
-            ]
+            collected: list[str] = []
+            budget_exhausted = False
+            async for token in self._llm_gateway.stream(
+                GatewayCallCommand(messages, RAG_PROMPT_NAME, tenant)
+            ):
+                masked_token = self._secret_pii_scanner.mask(token)
+                collected.append(token)
+                yield masked_token
+
+                current_tokens = -(-len("".join(collected)) // APPROX_CHARS_PER_TOKEN)
+                elapsed_ms = (time.monotonic() - start_time) * 1000
+                if command.budget.is_exhausted(
+                    iteration - 1, tokens_used + current_tokens, elapsed_ms
+                ):
+                    budget_exhausted = True
+                    break
 
             raw = "".join(collected)
             tokens_used += -(-len(raw) // APPROX_CHARS_PER_TOKEN)
 
             elapsed_ms = (time.monotonic() - start_time) * 1000
-            if command.budget.is_exhausted(iteration, tokens_used, elapsed_ms):
+            if budget_exhausted or command.budget.is_exhausted(iteration, tokens_used, elapsed_ms):
                 await self._emit_progress(
                     callback, iteration, "generating", last_confidence, last_missing
                 )
-                yield self._secret_pii_scanner.mask(raw)
                 return
 
             await self._emit_progress(
@@ -138,7 +150,6 @@ class AgenticAskUseCase:
                 await self._emit_progress(
                     callback, iteration, "critiquing", last_confidence, last_missing
                 )
-                yield self._secret_pii_scanner.mask(raw)
                 return
 
             await self._emit_progress(
