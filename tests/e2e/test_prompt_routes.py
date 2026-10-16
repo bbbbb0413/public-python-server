@@ -70,13 +70,15 @@ async def test_create_rejects_invalid_name(shared_repo) -> None:  # type: ignore
     assert response.status_code == 422
 
 
-async def test_list_versions_user_isolation(shared_repo) -> None:  # type: ignore[no-untyped-def]
+async def test_list_prompts_isolation_by_user_id(shared_repo) -> None:  # type: ignore[no-untyped-def]
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create global v1
         await client.post(
             "/prompts",
             json={"name": "rag-qa-system", "content": "global-v1", "variables": ["context"]},
         )
+        # Create user-A v2
         await client.post(
             "/prompts",
             json={
@@ -86,6 +88,7 @@ async def test_list_versions_user_isolation(shared_repo) -> None:  # type: ignor
                 "userId": "user-A",
             },
         )
+        # Create user-B v3
         await client.post(
             "/prompts",
             json={
@@ -118,9 +121,10 @@ async def test_list_versions_user_isolation(shared_repo) -> None:  # type: ignor
         assert res_none.json() == []
 
 
-async def test_list_versions_when_no_global_prompt_exists(shared_repo) -> None:  # type: ignore[no-untyped-def]
+async def test_list_prompts_when_only_user_prompts_exist(shared_repo) -> None:  # type: ignore[no-untyped-def]
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create user-A v1
         await client.post(
             "/prompts",
             json={
@@ -130,6 +134,7 @@ async def test_list_versions_when_no_global_prompt_exists(shared_repo) -> None: 
                 "userId": "user-A",
             },
         )
+        # Create user-B v2
         await client.post(
             "/prompts",
             json={
@@ -146,4 +151,5 @@ async def test_list_versions_when_no_global_prompt_exists(shared_repo) -> None: 
         assert len(items) == 1
         assert items[0]["version"] == 1
         assert items[0]["userId"] == "user-A"
+
 
