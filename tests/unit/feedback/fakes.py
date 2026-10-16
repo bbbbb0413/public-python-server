@@ -40,6 +40,14 @@ class FakeAnswerFeedbackRepository:
             key=lambda f: f.turn_index,
         )
 
+    async def delete(self, session_id: str, turn_index: int, user_id: str) -> bool:
+        key = (session_id, turn_index, user_id)
+        if key in self.storage:
+            del self.storage[key]
+            return True
+        return False
+
+
 
 class FakeSessionRepository:
     def __init__(self) -> None:

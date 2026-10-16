@@ -151,5 +151,3 @@ async def test_list_prompts_when_only_user_prompts_exist(shared_repo) -> None:  
         assert len(items) == 1
         assert items[0]["version"] == 1
         assert items[0]["userId"] == "user-A"
-
-

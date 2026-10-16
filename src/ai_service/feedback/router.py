@@ -39,4 +39,19 @@ async def get_for_session(
     return [FeedbackOut.from_domain(f) for f in items]
 
 
+@router.delete("", status_code=204)
+async def delete(
+    service: FeedbackServiceDep,
+    session_id: str = Query(alias="sessionId"),
+    turn_index: int = Query(alias="turnIndex"),
+    user_id: str = Query(alias="userId"),
+) -> None:
+    """답변 평가 삭제. 세션 및 턴 소유권을 확인한 후 삭제한다."""
+    try:
+        await service.delete(session_id, turn_index, user_id)
+    except FeedbackError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 __all__ = ["router"]
+
