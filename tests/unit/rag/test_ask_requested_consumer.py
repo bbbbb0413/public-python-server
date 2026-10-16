@@ -320,7 +320,7 @@ async def test_ask_requested_consumer_complex_publishes_done_with_metadata():
     )
     await consumer._process(message)
 
-    # redis xadd 호출 확인: done 이벤트에 confidence, missing 메타데이터가 포함되었는지
+    # redis xadd 호출 확인: done 이벤트에 confidence, missing, iterations 메타데이터가 포함되었는지
     done_calls = [
         call
         for call in redis_mock.xadd.await_args_list
@@ -329,7 +329,102 @@ async def test_ask_requested_consumer_complex_publishes_done_with_metadata():
     assert len(done_calls) == 1
     assert "data" in done_calls[0].args[1]
     done_data = json.loads(done_calls[0].args[1]["data"])
-    assert done_data == {"confidence": 0.85, "missing": ["추가 설명"]}
+    assert done_data == {"confidence": 0.85, "missing": ["추가 설명"], "iterations": 1}
+
+
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_complex_multiple_iterations_publishes_latest_iteration():
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+
+    agentic_use_case_mock = MagicMock(spec=AgenticAskUseCase)
+
+    async def fake_agentic_execute(command) -> AsyncIterator[str]:
+        if command.on_progress:
+            # 1회차 진행 및 비평 불만족
+            await command.on_progress(
+                {"iteration": 1, "phase": "searching", "confidence": 0.0, "missing": []}
+            )
+            await command.on_progress(
+                {"iteration": 1, "phase": "generating", "confidence": 0.0, "missing": []}
+            )
+            await command.on_progress(
+                {
+                    "iteration": 1,
+                    "phase": "critiquing",
+                    "confidence": 0.5,
+                    "missing": ["상세 정보 필요"],
+                }
+            )
+            await command.on_progress(
+                {
+                    "iteration": 1,
+                    "phase": "refining",
+                    "confidence": 0.5,
+                    "missing": ["상세 정보 필요"],
+                }
+            )
+            # 2회차 재검색 및 비평 만족
+            await command.on_progress(
+                {"iteration": 2, "phase": "searching", "confidence": 0.5, "missing": []}
+            )
+            await command.on_progress(
+                {"iteration": 2, "phase": "generating", "confidence": 0.5, "missing": []}
+            )
+            await command.on_progress(
+                {"iteration": 2, "phase": "critiquing", "confidence": 0.95, "missing": []}
+            )
+        yield "개선된 2회차 최종 답변입니다."
+
+    agentic_use_case_mock.execute.side_effect = fake_agentic_execute
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "complex"
+
+    validator_mock = MagicMock(spec=RagContentValidator)
+    validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
+
+    initial_session = ConversationSession.create("user-1", "복합 질의")
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
+    session_repo_mock.persist = AsyncMock(return_value=initial_session)
+    session_repo_mock.update = AsyncMock(return_value=initial_session)
+
+    composition = RagComposition(
+        ask_use_case=MagicMock(spec=AskUseCase),
+        agentic_ask_use_case=agentic_use_case_mock,
+        query_complexity_router=router_mock,
+        rag_validator=validator_mock,
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(3, 1000, 5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    message = AskRequestedMessage(
+        job_id="test-job-complex-multi-iteration",
+        user_id="user-1",
+        question="복합 질의",
+    )
+    await consumer._process(message)
+
+    done_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "done"
+    ]
+    assert len(done_calls) == 1
+    assert "data" in done_calls[0].args[1]
+    done_data = json.loads(done_calls[0].args[1]["data"])
+    assert done_data == {"confidence": 0.95, "missing": [], "iterations": 2}
 
 
 @pytest.mark.asyncio
@@ -562,6 +657,167 @@ async def test_ask_requested_consumer_complex_persists_confidence_and_missing_to
 
 
 @pytest.mark.asyncio
+async def test_ask_requested_consumer_simple_persists_confidence_and_publishes_done():
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+
+    sources_data = [
+        {
+            "fileName": "test.pdf",
+            "chunkIndex": 0,
+            "documentId": "doc-1",
+            "snippet": "테스트 요약",
+            "score": 0.88,
+        }
+    ]
+    confidence_data = {"confidence": 0.88, "missing": []}
+
+    ask_use_case_mock = MagicMock(spec=AskUseCase)
+
+    async def fake_ask_execute(_command) -> AsyncIterator[str]:
+        yield f"__SOURCES:{json.dumps(sources_data)}"
+        yield f"__CONFIDENCE:{json.dumps(confidence_data)}"
+        yield "단순 답변입니다."
+
+    ask_use_case_mock.execute.side_effect = fake_ask_execute
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "simple"
+
+    validator_mock = MagicMock(spec=RagContentValidator)
+    validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
+
+    initial_session = ConversationSession.create("user-1", "질문입니다")
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
+    session_repo_mock.persist = AsyncMock(return_value=initial_session)
+    session_repo_mock.update = AsyncMock(return_value=initial_session)
+
+    composition = RagComposition(
+        ask_use_case=ask_use_case_mock,
+        agentic_ask_use_case=MagicMock(spec=AgenticAskUseCase),
+        query_complexity_router=router_mock,
+        rag_validator=validator_mock,
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(3, 1000, 5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    message = AskRequestedMessage(
+        job_id="test-job-simple-confidence",
+        user_id="user-1",
+        question="질문입니다",
+        session_id=initial_session.get_session_id(),
+    )
+    await consumer._process(message)
+
+    # 1. session_repo.update 검증
+    session_repo_mock.update.assert_awaited_once()
+    updated_session = session_repo_mock.update.await_args[0][0]
+    assert len(updated_session.turns) == 2
+    assert updated_session.turns[1].role == "assistant"
+    assert updated_session.turns[1].content == "단순 답변입니다."
+    assert updated_session.turns[1].sources == sources_data
+    assert updated_session.turns[1].confidence == 0.88
+    assert updated_session.turns[1].missing == []
+
+    # 2. done 이벤트에 confidence 메타데이터 포함 검증
+    done_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "done"
+    ]
+    assert len(done_calls) == 1
+    assert "data" in done_calls[0].args[1]
+    done_data = json.loads(done_calls[0].args[1]["data"])
+    assert done_data == {"confidence": 0.88, "missing": []}
+
+
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_simple_persists_zero_confidence_when_no_chunks():
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+
+    confidence_data = {"confidence": 0.0, "missing": ["관련 지식베이스 문서를 찾지 못함"]}
+
+    ask_use_case_mock = MagicMock(spec=AskUseCase)
+
+    async def fake_ask_execute(_command) -> AsyncIterator[str]:
+        yield f"__CONFIDENCE:{json.dumps(confidence_data, ensure_ascii=False)}"
+        yield "근거 없는 답변입니다."
+
+    ask_use_case_mock.execute.side_effect = fake_ask_execute
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "simple"
+
+    validator_mock = MagicMock(spec=RagContentValidator)
+    validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
+
+    initial_session = ConversationSession.create("user-1", "문서 없는 질문")
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
+    session_repo_mock.persist = AsyncMock(return_value=initial_session)
+    session_repo_mock.update = AsyncMock(return_value=initial_session)
+
+    composition = RagComposition(
+        ask_use_case=ask_use_case_mock,
+        agentic_ask_use_case=MagicMock(spec=AgenticAskUseCase),
+        query_complexity_router=router_mock,
+        rag_validator=validator_mock,
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(3, 1000, 5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    message = AskRequestedMessage(
+        job_id="test-job-simple-zero-confidence",
+        user_id="user-1",
+        question="문서 없는 질문",
+        session_id=initial_session.get_session_id(),
+    )
+    await consumer._process(message)
+
+    # 1. session_repo.update 검증
+    session_repo_mock.update.assert_awaited_once()
+    updated_session = session_repo_mock.update.await_args[0][0]
+    assert len(updated_session.turns) == 2
+    assert updated_session.turns[1].role == "assistant"
+    assert updated_session.turns[1].content == "근거 없는 답변입니다."
+    assert updated_session.turns[1].sources is None
+    assert updated_session.turns[1].confidence == 0.0
+    assert updated_session.turns[1].missing == ["관련 지식베이스 문서를 찾지 못함"]
+
+    # 2. done 이벤트에 0.0 confidence 메타데이터 포함 검증
+    done_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "done"
+    ]
+    assert len(done_calls) == 1
+    assert "data" in done_calls[0].args[1]
+    done_data = json.loads(done_calls[0].args[1]["data"])
+    assert done_data == {"confidence": 0.0, "missing": ["관련 지식베이스 문서를 찾지 못함"]}
+
+
 async def test_ask_requested_consumer_complex_persists_latest_multi_turn_sources():
     redis_mock = MagicMock(spec=Redis)
     redis_mock.xadd = AsyncMock()
@@ -661,8 +917,3 @@ async def test_ask_requested_consumer_complex_persists_latest_multi_turn_sources
     assert assistant_turn.sources[0]["documentId"] == "doc-A"
     assert assistant_turn.sources[0]["score"] == 0.9
     assert assistant_turn.sources[1]["documentId"] == "doc-B"
-
-
-
-
-

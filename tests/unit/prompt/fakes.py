@@ -7,10 +7,8 @@ class FakePromptTemplateRepository:
         self._next_id = 1
 
     async def persist(self, template: PromptTemplate) -> PromptTemplate:
-        template_id = template.id or str(self._next_id)
-        stored = PromptTemplate.restore(_props_with_id(template, template_id))
+        stored = PromptTemplate.restore(_props_with_id(template, str(self._next_id)))
         self._next_id += 1
-        
         self.storage[(stored.name.get_value(), stored.version, stored.user_id)] = stored
         return stored
 
@@ -45,20 +43,20 @@ class FakePromptTemplateRepository:
         return None
 
     async def find_active_for_user(self, name: str, user_id: str) -> PromptTemplate | None:
-        for t in self.storage.values():
-            if t.name.get_value() == name and t.user_id == user_id and t.is_active:
+        for (n, _, _), t in self.storage.items():
+            if n == name and t.user_id == user_id and t.is_active:
                 return t
         return None
 
     async def deactivate_all_by_name(self, name: str) -> None:
-        for template_id, t in list(self.storage.items()):
-            if t.name.get_value() == name and t.user_id is None and t.is_active:
-                self.storage[template_id] = t.deactivate()
+        for key, t in list(self.storage.items()):
+            if key[0] == name and t.user_id is None and t.is_active:
+                self.storage[key] = t.deactivate()
 
     async def deactivate_all_by_name_for_user(self, name: str, user_id: str) -> None:
-        for template_id, t in list(self.storage.items()):
-            if t.name.get_value() == name and t.user_id == user_id and t.is_active:
-                self.storage[template_id] = t.deactivate()
+        for key, t in list(self.storage.items()):
+            if key[0] == name and t.user_id == user_id and t.is_active:
+                self.storage[key] = t.deactivate()
 
     async def deactivate_active_for_user(self, name: str, user_id: str) -> None:
         await self.deactivate_all_by_name_for_user(name, user_id)

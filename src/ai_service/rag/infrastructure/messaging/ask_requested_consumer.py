@@ -19,6 +19,7 @@ ASK_REQUESTED_TOPIC = "ai.rag.ask.requested"
 CONSUMER_GROUP_ID = "ai-service-rag"
 
 _SOURCES_PREFIX = "__SOURCES:"
+_CONFIDENCE_PREFIX = "__CONFIDENCE:"
 _DEFAULT_ASK_TOP_K = 15
 _DEFAULT_AGENTIC_TOP_K = 5
 
@@ -113,14 +114,17 @@ class AskRequestedConsumer:
 
         last_confidence: float | None = None
         last_missing: list[str] | None = None
+        last_iteration: int | None = None
 
         if complexity == "complex":
             async def on_progress(data: dict[str, Any]) -> None:
-                nonlocal last_confidence, last_missing
+                nonlocal last_confidence, last_missing, last_iteration
                 if "confidence" in data:
                     last_confidence = data["confidence"]
                 if "missing" in data:
                     last_missing = data["missing"]
+                if "iteration" in data:
+                    last_iteration = data["iteration"]
                 await self._publisher.publish_progress(message.job_id, data)
 
             stream = composition.agentic_ask_use_case.execute(
@@ -172,6 +176,12 @@ class AskRequestedConsumer:
                         message.job_id, {"iteration": 0, "phase": "generating"}
                     )
                     generating_announced = True
+            elif chunk.startswith(_CONFIDENCE_PREFIX):
+                meta = json.loads(chunk[len(_CONFIDENCE_PREFIX) :])
+                if "confidence" in meta:
+                    last_confidence = meta["confidence"]
+                if "missing" in meta:
+                    last_missing = meta["missing"]
             else:
                 if not generating_announced:
                     await self._publisher.publish_progress(
@@ -199,6 +209,8 @@ class AskRequestedConsumer:
                 "confidence": last_confidence,
                 "missing": last_missing,
             }
+            if last_iteration is not None:
+                done_data["iterations"] = last_iteration
 
         await self._publisher.publish_done(message.job_id, done_data)
 
