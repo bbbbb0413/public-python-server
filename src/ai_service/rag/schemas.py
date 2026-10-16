@@ -34,6 +34,7 @@ class TurnValue:
     sources: list[dict[str, Any]] | None = None
     confidence: float | None = None
     missing: list[str] | None = None
+    iterations: int | None = None
 
 
 class ConversationTurn:
@@ -51,6 +52,7 @@ class ConversationTurn:
         sources: list[dict[str, Any]] | None = None,
         confidence: float | None = None,
         missing: list[str] | None = None,
+        iterations: int | None = None,
     ) -> "ConversationTurn":
         return cls(
             TurnValue(
@@ -60,6 +62,7 @@ class ConversationTurn:
                 sources=sources,
                 confidence=confidence,
                 missing=missing,
+                iterations=iterations,
             )
         )
 
@@ -91,6 +94,10 @@ class ConversationTurn:
     def missing(self) -> list[str] | None:
         return self._value.missing
 
+    @property
+    def iterations(self) -> int | None:
+        return self._value.iterations
+
 
 @dataclass(frozen=True)
 class TurnRecord:
@@ -100,6 +107,7 @@ class TurnRecord:
     sources: list[dict[str, Any]] | None = None
     confidence: float | None = None
     missing: list[str] | None = None
+    iterations: int | None = None
 
 
 @dataclass(frozen=True)
@@ -146,6 +154,7 @@ class ConversationSession:
                     sources=t.sources,
                     confidence=t.confidence,
                     missing=t.missing,
+                    iterations=t.iterations,
                 )
             )
             for t in props.turns
@@ -166,6 +175,7 @@ class ConversationSession:
         sources: list[dict[str, Any]] | None = None,
         confidence: float | None = None,
         missing: list[str] | None = None,
+        iterations: int | None = None,
     ) -> "ConversationSession":
         new_turns = [
             *self._turns,
@@ -175,6 +185,7 @@ class ConversationSession:
                 sources=sources,
                 confidence=confidence,
                 missing=missing,
+                iterations=iterations,
             ),
         ]
         return ConversationSession(
@@ -343,6 +354,7 @@ class SessionTurnOut(BaseModel):
     sources: list[dict[str, Any]] | None = None
     confidence: float | None = None
     missing: list[str] | None = None
+    iterations: int | None = None
 
     @classmethod
     def from_domain(cls, turn: ConversationTurn) -> "SessionTurnOut":
@@ -353,6 +365,7 @@ class SessionTurnOut(BaseModel):
             sources=turn.sources,
             confidence=turn.confidence,
             missing=turn.missing,
+            iterations=turn.iterations,
         )
 
 

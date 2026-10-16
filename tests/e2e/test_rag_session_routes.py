@@ -50,6 +50,7 @@ async def test_get_session_returns_turns_with_metadata() -> None:
                 sources=sources,
                 confidence=0.92,
                 missing=["예외 규정"],
+                iterations=2,
             ),
         ],
         created_at=now,
@@ -73,12 +74,14 @@ async def test_get_session_returns_turns_with_metadata() -> None:
     assert body["turns"][0]["sources"] is None
     assert body["turns"][0]["confidence"] is None
     assert body["turns"][0]["missing"] is None
+    assert body["turns"][0]["iterations"] is None
 
     assert body["turns"][1]["role"] == "assistant"
     assert body["turns"][1]["content"] == "환불 가능합니다."
     assert body["turns"][1]["sources"] == sources
     assert body["turns"][1]["confidence"] == 0.92
     assert body["turns"][1]["missing"] == ["예외 규정"]
+    assert body["turns"][1]["iterations"] == 2
 
 
 async def test_get_session_with_zero_confidence_and_ungrounded_warning() -> None:
@@ -120,22 +123,34 @@ async def test_get_session_with_zero_confidence_and_ungrounded_warning() -> None
     assert body["turns"][1]["sources"] is None
     assert body["turns"][1]["confidence"] == 0.0
     assert body["turns"][1]["missing"] == ["관련 지식베이스 문서를 찾지 못함"]
+    assert body["turns"][1]["iterations"] is None
 
 
 async def test_get_session_legacy_data_returns_none_metadata() -> None:
     now = datetime.now(UTC)
-    props = RestoreProps(
-        session_id="session-legacy-123",
-        user_id="user-1",
-        title="레거시 세션",
-        turns=[
-            TurnRecord(role="user", content="질문", created_at=now),
-            TurnRecord(role="assistant", content="답변", created_at=now),
+    legacy_sources = [
+        {"fileName": "legacy.pdf", "chunkIndex": 0, "documentId": "doc-old", "snippet": "과거 문서"}
+    ]
+    legacy_mongo_doc: dict[str, Any] = {
+        "sessionId": "session-legacy-123",
+        "userId": "user-1",
+        "title": "레거시 세션",
+        "turns": [
+            {"role": "user", "content": "질문", "createdAt": now},
+            {
+                "role": "assistant",
+                "content": "답변",
+                "createdAt": now,
+                "sources": legacy_sources,
+                "confidence": 0.87,
+                "missing": [],
+            },
+            {"role": "assistant", "content": "초기 레거시 답변", "createdAt": now},
         ],
-        created_at=now,
-        updated_at=now,
-    )
-    session = ConversationSession.restore(props)
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    session = ConversationSessionRepository._to_domain(legacy_mongo_doc)
 
     repo_mock = MagicMock(spec=ConversationSessionRepository)
     repo_mock.find_by_id_for_user = AsyncMock(return_value=session)
@@ -148,10 +163,17 @@ async def test_get_session_legacy_data_returns_none_metadata() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["sessionId"] == "session-legacy-123"
-    assert len(body["turns"]) == 2
-    assert body["turns"][1]["sources"] is None
-    assert body["turns"][1]["confidence"] is None
-    assert body["turns"][1]["missing"] is None
+    assert len(body["turns"]) == 3
+    assert body["turns"][0]["iterations"] is None
+    assert body["turns"][1]["content"] == "답변"
+    assert body["turns"][1]["sources"] == legacy_sources
+    assert body["turns"][1]["confidence"] == 0.87
+    assert body["turns"][1]["missing"] == []
+    assert body["turns"][1]["iterations"] is None
+    assert body["turns"][2]["sources"] is None
+    assert body["turns"][2]["confidence"] is None
+    assert body["turns"][2]["missing"] is None
+    assert body["turns"][2]["iterations"] is None
 
 
 async def test_get_session_not_found_returns_404() -> None:

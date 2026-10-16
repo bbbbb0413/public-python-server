@@ -200,6 +200,7 @@ class AskRequestedConsumer:
                 sources=sources,
                 confidence=last_confidence,
                 missing=last_missing,
+                iterations=last_iteration,
             )
             await composition.session_repo.update(updated)
 

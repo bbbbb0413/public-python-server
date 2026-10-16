@@ -426,6 +426,16 @@ async def test_ask_requested_consumer_complex_multiple_iterations_publishes_late
     done_data = json.loads(done_calls[0].args[1]["data"])
     assert done_data == {"confidence": 0.95, "missing": [], "iterations": 2}
 
+    session_repo_mock.update.assert_awaited_once()
+    updated_session = session_repo_mock.update.await_args[0][0]
+    assert len(updated_session.turns) == 2
+    assert updated_session.turns[0].iterations is None
+    assert updated_session.turns[1].role == "assistant"
+    assert updated_session.turns[1].content == "개선된 2회차 최종 답변입니다."
+    assert updated_session.turns[1].confidence == 0.95
+    assert updated_session.turns[1].missing == []
+    assert updated_session.turns[1].iterations == 2
+
 
 @pytest.mark.asyncio
 async def test_ask_requested_consumer_cancelled_stops_token_streaming():
@@ -654,6 +664,7 @@ async def test_ask_requested_consumer_complex_persists_confidence_and_missing_to
     assert updated_session.turns[1].content == "에이전틱 답변입니다."
     assert updated_session.turns[1].confidence == 0.85
     assert updated_session.turns[1].missing == ["추가 설명"]
+    assert updated_session.turns[1].iterations == 1
 
 
 @pytest.mark.asyncio
@@ -724,11 +735,13 @@ async def test_ask_requested_consumer_simple_persists_confidence_and_publishes_d
     session_repo_mock.update.assert_awaited_once()
     updated_session = session_repo_mock.update.await_args[0][0]
     assert len(updated_session.turns) == 2
+    assert updated_session.turns[0].iterations is None
     assert updated_session.turns[1].role == "assistant"
     assert updated_session.turns[1].content == "단순 답변입니다."
     assert updated_session.turns[1].sources == sources_data
     assert updated_session.turns[1].confidence == 0.88
     assert updated_session.turns[1].missing == []
+    assert updated_session.turns[1].iterations is None
 
     # 2. done 이벤트에 confidence 메타데이터 포함 검증
     done_calls = [
