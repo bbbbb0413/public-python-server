@@ -226,6 +226,45 @@ async def test_delete_prompt_version_and_fallback_flow(shared_repo) -> None:  # 
         assert active_res.json()["version"] == 0
 
 
+async def test_delete_prompt_version_falls_back_to_global_active_prompt(shared_repo) -> None:  # type: ignore[no-untyped-def]
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "global-v1",
+                "variables": ["context"],
+            },
+        )
+        await client.patch("/prompts/rag-qa-system/1/activate")
+
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "user-a-v2",
+                "variables": ["context"],
+                "userId": "user-A",
+            },
+        )
+        await client.patch(
+            "/prompts/rag-qa-system/2/activate", params={"userId": "user-A"}
+        )
+
+        del_res = await client.delete(
+            "/prompts/rag-qa-system/2", params={"userId": "user-A"}
+        )
+        assert del_res.status_code == 204
+
+        active_res = await client.get(
+            "/prompts/rag-qa-system/active", params={"userId": "user-A"}
+        )
+        assert active_res.status_code == 200
+        assert active_res.json()["version"] == 1
+        assert active_res.json()["content"] == "global-v1"
+
+
 async def test_delete_prompt_version_returns_404_when_not_found_or_other_user(shared_repo) -> None:  # type: ignore[no-untyped-def]
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -243,6 +282,9 @@ async def test_delete_prompt_version_returns_404_when_not_found_or_other_user(sh
             "/prompts/rag-qa-system/1", params={"userId": "user-B"}
         )
         assert other_user_res.status_code == 404
+
+        global_scope_res = await client.delete("/prompts/rag-qa-system/1")
+        assert global_scope_res.status_code == 404
 
         missing_ver_res = await client.delete(
             "/prompts/rag-qa-system/999", params={"userId": "user-A"}

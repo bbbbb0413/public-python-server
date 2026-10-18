@@ -236,6 +236,51 @@ async def test_delete_prompt_removes_version_and_falls_back_on_get_active() -> N
     assert active.content == RAG_QA_DEFAULT_PROMPT
 
 
+async def test_delete_prompt_falls_back_to_global_active_when_present() -> None:
+    repo = FakePromptTemplateRepository()
+    service = PromptService(repo)
+    await service.create_prompt(
+        CreatePromptIn(name="rag-qa-system", content="global-v1")
+    )
+    await service.activate_prompt("rag-qa-system", version=1)
+
+    await service.create_prompt(
+        CreatePromptIn(name="rag-qa-system", content="user-a-v2", userId="user-A")
+    )
+    await service.activate_prompt("rag-qa-system", version=2, user_id="user-A")
+
+    await service.delete_prompt("rag-qa-system", version=2, user_id="user-A")
+
+    active = await service.get_active_prompt("rag-qa-system", user_id="user-A")
+    assert active.version == 1
+    assert active.user_id is None
+    assert active.content == "global-v1"
+
+
+async def test_delete_prompt_isolates_same_version_across_users_and_global() -> None:
+    repo = FakePromptTemplateRepository()
+    service = PromptService(repo)
+    await repo.persist(
+        PromptTemplate.create(name="rag-qa-system", content="global-v1", version=1, user_id=None)
+    )
+    await repo.persist(
+        PromptTemplate.create(
+            name="rag-qa-system", content="user-a-v1", version=1, user_id="user-A"
+        )
+    )
+    await repo.persist(
+        PromptTemplate.create(
+            name="rag-qa-system", content="user-b-v1", version=1, user_id="user-B"
+        )
+    )
+
+    await service.delete_prompt("rag-qa-system", version=1, user_id="user-A")
+
+    assert await repo.find_by_name_and_version("rag-qa-system", 1, "user-A") is None
+    assert await repo.find_by_name_and_version("rag-qa-system", 1, None) is not None
+    assert await repo.find_by_name_and_version("rag-qa-system", 1, "user-B") is not None
+
+
 async def test_delete_prompt_raises_for_missing_or_other_users_version() -> None:
     repo = FakePromptTemplateRepository()
     service = PromptService(repo)
