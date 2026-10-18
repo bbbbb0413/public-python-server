@@ -37,9 +37,27 @@ class PromptTemplateRepository:
         result = await self._collection.insert_one(record)
         return self._to_domain({**record, "_id": result.inserted_id})
 
-    async def find_by_name_and_version(self, name: str, version: int) -> PromptTemplate | None:
-        record = await self._collection.find_one({"name": name, "version": version})
+    async def find_by_name_and_version(
+        self, name: str, version: int, user_id: str | None = None
+    ) -> PromptTemplate | None:
+        query: dict[str, Any] = {
+            "name": name,
+            "version": version,
+            "userId": user_id if user_id is not None else {"$exists": False},
+        }
+        record = await self._collection.find_one(query)
         return self._to_domain(record) if record else None
+
+    async def delete_by_name_and_version(
+        self, name: str, version: int, user_id: str | None = None
+    ) -> bool:
+        query: dict[str, Any] = {
+            "name": name,
+            "version": version,
+            "userId": user_id if user_id is not None else {"$exists": False},
+        }
+        result = await self._collection.delete_one(query)
+        return bool(result.deleted_count > 0)
 
     async def find_all_by_name(
         self, name: str, user_id: str | None = None

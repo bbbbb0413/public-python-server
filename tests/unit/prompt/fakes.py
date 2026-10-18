@@ -12,11 +12,15 @@ class FakePromptTemplateRepository:
         self.storage[(stored.name.get_value(), stored.version, stored.user_id)] = stored
         return stored
 
-    async def find_by_name_and_version(self, name: str, version: int) -> PromptTemplate | None:
-        for (n, v, _), t in self.storage.items():
-            if n == name and v == version:
-                return t
-        return None
+    async def find_by_name_and_version(
+        self, name: str, version: int, user_id: str | None = None
+    ) -> PromptTemplate | None:
+        return self.storage.get((name, version, user_id))
+
+    async def delete_by_name_and_version(
+        self, name: str, version: int, user_id: str | None = None
+    ) -> bool:
+        return self.storage.pop((name, version, user_id), None) is not None
 
     async def find_all_by_name(
         self, name: str, user_id: str | None = None

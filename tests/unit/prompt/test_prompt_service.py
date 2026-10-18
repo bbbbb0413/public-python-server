@@ -188,3 +188,114 @@ async def test_list_versions_when_only_user_prompts_exist_returns_own_prompts_on
     assert templates_a[0].user_id == "user-A"
 
 
+async def test_activate_prompt_isolates_same_version_across_users_and_global() -> None:
+    repo = FakePromptTemplateRepository()
+    service = PromptService(repo)
+    await repo.persist(
+        PromptTemplate.create(name="rag-qa-system", content="global-v1", version=1, user_id=None)
+    )
+    await repo.persist(
+        PromptTemplate.create(
+            name="rag-qa-system", content="user-a-v1", version=1, user_id="user-A"
+        )
+    )
+    await repo.persist(
+        PromptTemplate.create(
+            name="rag-qa-system", content="user-b-v1", version=1, user_id="user-B"
+        )
+    )
+
+    activated_b = await service.activate_prompt("rag-qa-system", version=1, user_id="user-B")
+
+    assert activated_b.is_active is True
+    assert activated_b.user_id == "user-B"
+    assert activated_b.content == "user-b-v1"
+    global_v1 = await repo.find_by_name_and_version("rag-qa-system", 1, None)
+    user_a_v1 = await repo.find_by_name_and_version("rag-qa-system", 1, "user-A")
+    assert global_v1 is not None and global_v1.is_active is False
+    assert user_a_v1 is not None and user_a_v1.is_active is False
+
+
+async def test_delete_prompt_removes_version_and_falls_back_on_get_active() -> None:
+    repo = FakePromptTemplateRepository()
+    service = PromptService(repo)
+    await service.create_prompt(
+        CreatePromptIn(name="rag-qa-system", content="user-a-v1", userId="user-A")
+    )
+    await service.create_prompt(
+        CreatePromptIn(name="rag-qa-system", content="user-a-v2", userId="user-A")
+    )
+    await service.activate_prompt("rag-qa-system", version=2, user_id="user-A")
+
+    await service.delete_prompt("rag-qa-system", version=2, user_id="user-A")
+
+    assert await repo.find_by_name_and_version("rag-qa-system", 2, "user-A") is None
+    assert await repo.find_by_name_and_version("rag-qa-system", 1, "user-A") is not None
+    active = await service.get_active_prompt("rag-qa-system", user_id="user-A")
+    assert active.version == 0
+    assert active.content == RAG_QA_DEFAULT_PROMPT
+
+
+async def test_delete_prompt_raises_for_missing_or_other_users_version() -> None:
+    repo = FakePromptTemplateRepository()
+    service = PromptService(repo)
+    await service.create_prompt(
+        CreatePromptIn(name="rag-qa-system", content="user-a-v1", userId="user-A")
+    )
+
+    with pytest.raises(PromptTemplateNotFoundError):
+        await service.delete_prompt("rag-qa-system", version=999, user_id="user-A")
+
+    with pytest.raises(PromptTemplateNotFoundError):
+        await service.delete_prompt("rag-qa-system", version=1, user_id="user-B")
+
+    with pytest.raises(PromptTemplateNotFoundError):
+        await service.delete_prompt("rag-qa-system", version=1, user_id=None)
+
+    assert await repo.find_by_name_and_version("rag-qa-system", 1, "user-A") is not None
+
+
+async def test_repository_find_by_name_and_version_queries_with_user_isolation() -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from ai_service.prompt.repository import PromptTemplateRepository
+
+    repo = PromptTemplateRepository.__new__(PromptTemplateRepository)
+    collection = MagicMock()
+    collection.find_one = AsyncMock(return_value=None)
+    repo._collection = collection
+
+    await repo.find_by_name_and_version("rag-qa-system", 1, user_id="user-A")
+    collection.find_one.assert_awaited_once_with(
+        {"name": "rag-qa-system", "version": 1, "userId": "user-A"}
+    )
+
+    collection.find_one.reset_mock()
+    await repo.find_by_name_and_version("rag-qa-system", 1)
+    collection.find_one.assert_awaited_once_with(
+        {"name": "rag-qa-system", "version": 1, "userId": {"$exists": False}}
+    )
+
+
+async def test_repository_delete_by_name_and_version_queries_with_user_isolation() -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from ai_service.prompt.repository import PromptTemplateRepository
+
+    repo = PromptTemplateRepository.__new__(PromptTemplateRepository)
+    collection = MagicMock()
+    collection.delete_one = AsyncMock(return_value=MagicMock(deleted_count=1))
+    repo._collection = collection
+
+    deleted = await repo.delete_by_name_and_version("rag-qa-system", 2, user_id="user-A")
+    assert deleted is True
+    collection.delete_one.assert_awaited_once_with(
+        {"name": "rag-qa-system", "version": 2, "userId": "user-A"}
+    )
+
+    collection.delete_one = AsyncMock(return_value=MagicMock(deleted_count=0))
+    deleted_global = await repo.delete_by_name_and_version("rag-qa-system", 2)
+    assert deleted_global is False
+    collection.delete_one.assert_awaited_once_with(
+        {"name": "rag-qa-system", "version": 2, "userId": {"$exists": False}}
+    )
