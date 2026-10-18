@@ -59,4 +59,17 @@ async def reset_active_for_user(
     await service.deactivate_active_prompt(name, user_id)
 
 
+@router.delete("/{name}/{version}", status_code=204)
+async def delete_version(
+    name: str,
+    version: int,
+    service: PromptServiceDep,
+    user_id: str | None = Query(default=None, alias="userId"),
+) -> None:
+    try:
+        await service.delete_prompt(name, version, user_id)
+    except PromptTemplateNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
 __all__ = ["router"]

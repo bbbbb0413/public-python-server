@@ -151,3 +151,175 @@ async def test_list_prompts_when_only_user_prompts_exist(shared_repo) -> None:  
         assert len(items) == 1
         assert items[0]["version"] == 1
         assert items[0]["userId"] == "user-A"
+
+
+async def test_activate_same_version_number_across_users_is_isolated(shared_repo) -> None:  # type: ignore[no-untyped-def]
+    from ai_service.prompt.schemas import PromptTemplate
+
+    await shared_repo.persist(
+        PromptTemplate.create(name="rag-qa-system", content="global-v1", version=1, user_id=None)
+    )
+    await shared_repo.persist(
+        PromptTemplate.create(
+            name="rag-qa-system", content="user-a-v1", version=1, user_id="user-A"
+        )
+    )
+    await shared_repo.persist(
+        PromptTemplate.create(
+            name="rag-qa-system", content="user-b-v1", version=1, user_id="user-B"
+        )
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.patch(
+            "/prompts/rag-qa-system/1/activate", params={"userId": "user-B"}
+        )
+        assert res.status_code == 200
+        body = res.json()
+        assert body["version"] == 1
+        assert body["isActive"] is True
+        assert body["userId"] == "user-B"
+        assert body["content"] == "user-b-v1"
+
+
+async def test_delete_prompt_version_and_fallback_flow(shared_repo) -> None:  # type: ignore[no-untyped-def]
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "user-a-v1",
+                "variables": ["context"],
+                "userId": "user-A",
+            },
+        )
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "user-a-v2",
+                "variables": ["context"],
+                "userId": "user-A",
+            },
+        )
+        activate_res = await client.patch(
+            "/prompts/rag-qa-system/2/activate", params={"userId": "user-A"}
+        )
+        assert activate_res.status_code == 200
+
+        del_res = await client.delete(
+            "/prompts/rag-qa-system/2", params={"userId": "user-A"}
+        )
+        assert del_res.status_code == 204
+
+        list_res = await client.get(
+            "/prompts/rag-qa-system", params={"userId": "user-A"}
+        )
+        assert [item["version"] for item in list_res.json()] == [1]
+
+        active_res = await client.get(
+            "/prompts/rag-qa-system/active", params={"userId": "user-A"}
+        )
+        assert active_res.status_code == 200
+        assert active_res.json()["version"] == 0
+
+
+async def test_delete_prompt_version_falls_back_to_global_active_prompt(shared_repo) -> None:  # type: ignore[no-untyped-def]
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "global-v1",
+                "variables": ["context"],
+            },
+        )
+        await client.patch("/prompts/rag-qa-system/1/activate")
+
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "user-a-v2",
+                "variables": ["context"],
+                "userId": "user-A",
+            },
+        )
+        await client.patch(
+            "/prompts/rag-qa-system/2/activate", params={"userId": "user-A"}
+        )
+
+        del_res = await client.delete(
+            "/prompts/rag-qa-system/2", params={"userId": "user-A"}
+        )
+        assert del_res.status_code == 204
+
+        active_res = await client.get(
+            "/prompts/rag-qa-system/active", params={"userId": "user-A"}
+        )
+        assert active_res.status_code == 200
+        assert active_res.json()["version"] == 1
+        assert active_res.json()["content"] == "global-v1"
+
+
+async def test_delete_prompt_version_returns_404_when_not_found_or_other_user(shared_repo) -> None:  # type: ignore[no-untyped-def]
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "user-a-v1",
+                "variables": ["context"],
+                "userId": "user-A",
+            },
+        )
+
+        other_user_res = await client.delete(
+            "/prompts/rag-qa-system/1", params={"userId": "user-B"}
+        )
+        assert other_user_res.status_code == 404
+
+        global_scope_res = await client.delete("/prompts/rag-qa-system/1")
+        assert global_scope_res.status_code == 404
+
+        missing_ver_res = await client.delete(
+            "/prompts/rag-qa-system/999", params={"userId": "user-A"}
+        )
+        assert missing_ver_res.status_code == 404
+
+        list_res = await client.get(
+            "/prompts/rag-qa-system", params={"userId": "user-A"}
+        )
+        assert len(list_res.json()) == 1
+        assert list_res.json()[0]["version"] == 1
+
+
+async def test_delete_active_route_does_not_conflict_with_delete_version(shared_repo) -> None:  # type: ignore[no-untyped-def]
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "user-a-v1",
+                "variables": ["context"],
+                "userId": "user-A",
+            },
+        )
+        await client.patch(
+            "/prompts/rag-qa-system/1/activate", params={"userId": "user-A"}
+        )
+
+        reset_res = await client.delete(
+            "/prompts/rag-qa-system/active", params={"userId": "user-A"}
+        )
+        assert reset_res.status_code == 204
+        list_res = await client.get(
+            "/prompts/rag-qa-system", params={"userId": "user-A"}
+        )
+        assert len(list_res.json()) == 1
+        assert list_res.json()[0]["isActive"] is False

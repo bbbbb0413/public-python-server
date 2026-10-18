@@ -78,7 +78,7 @@ class PromptService:
     async def activate_prompt(
         self, name: str, version: int, user_id: str | None = None
     ) -> PromptTemplate:
-        target = await self._repo.find_by_name_and_version(name, version)
+        target = await self._repo.find_by_name_and_version(name, version, user_id)
         if target is None or target.user_id != user_id:
             raise PromptTemplateNotFoundError(name, version)
 
@@ -88,6 +88,13 @@ class PromptService:
             await self._repo.deactivate_all_by_name(name)
         activated = target.activate()
         return await self._repo.update(activated)
+
+    async def delete_prompt(
+        self, name: str, version: int, user_id: str | None = None
+    ) -> None:
+        deleted = await self._repo.delete_by_name_and_version(name, version, user_id)
+        if not deleted:
+            raise PromptTemplateNotFoundError(name, version)
 
     async def deactivate_active_prompt(self, name: str, user_id: str) -> None:
         await self._repo.deactivate_active_for_user(name, user_id)
