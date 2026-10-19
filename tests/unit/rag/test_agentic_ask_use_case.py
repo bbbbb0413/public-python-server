@@ -885,6 +885,9 @@ async def test_agentic_ask_restores_session_history_and_rewrites_follow_up_query
     first_critique_args = mock_critique_generator.generate.await_args_list[0].args
     assert first_critique_args[0] == rewritten_question
 
+    second_critique_args = mock_critique_generator.generate.await_args_list[1].args
+    assert second_critique_args[0] == rewritten_question
+
     refine_args = mock_query_refiner.refine.call_args_list[0].args
     assert refine_args[0] == rewritten_question
 
@@ -956,6 +959,9 @@ async def test_agentic_ask_restores_session_history_without_rewrite_for_independ
     first_search_cmd = mock_hybrid_search.execute.await_args_list[0].args[0]
     assert first_search_cmd.query == independent_question
 
+    first_critique_args = mock_critique_generator.generate.await_args_list[0].args
+    assert first_critique_args[0] == independent_question
+
     assert len(captured_gateway_commands) == 1
     roles_and_contents = [(m.role, m.content) for m in captured_gateway_commands[0].messages[1:]]
     assert roles_and_contents == [
@@ -984,8 +990,8 @@ async def test_agentic_ask_handles_missing_or_empty_session_gracefully(
         session_repo.find_by_id = AsyncMock(return_value=empty_session)
 
     query_rewriter = MagicMock(spec=ConversationalQueryRewriter)
-    query_rewriter.is_follow_up.return_value = False
-    query_rewriter.rewrite = AsyncMock()
+    query_rewriter.is_follow_up.return_value = True
+    query_rewriter.rewrite = AsyncMock(return_value="호출되면 안 되는 재작성 질문")
 
     mock_critique_generator.generate.return_value = Critique.of(
         answered=True, missing=[], next_query="", confidence=0.9
@@ -1023,11 +1029,89 @@ async def test_agentic_ask_handles_missing_or_empty_session_gracefully(
     chunks = [c async for c in use_case.execute(command)]
     assert "".join(chunks) == "첫 질문 답변입니다."
 
+    query_rewriter.is_follow_up.assert_not_called()
     query_rewriter.rewrite.assert_not_awaited()
     first_search_cmd = mock_hybrid_search.execute.await_args_list[0].args[0]
     assert first_search_cmd.query == question
 
+    first_critique_args = mock_critique_generator.generate.await_args_list[0].args
+    assert first_critique_args[0] == question
+
     assert len(captured_gateway_commands) == 1
     roles_and_contents = [(m.role, m.content) for m in captured_gateway_commands[0].messages[1:]]
     assert roles_and_contents == [("user", question)]
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_uses_provided_conversation_history_without_session_lookup(
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    session_repo = MagicMock(spec=ConversationSessionRepository)
+    session_repo.find_by_id = AsyncMock()
+
+    provided_history = [
+        {"role": "user", "content": "엔터프라이즈 보안 정책 알려줘"},
+        {"role": "assistant", "content": "SSO와 감사 로그를 지원합니다."},
+    ]
+    rewritten_question = "엔터프라이즈 보안 정책의 SSO 설정 절차와 감사 로그 보관 주기를 비교해 줘"
+    query_rewriter = MagicMock(spec=ConversationalQueryRewriter)
+    query_rewriter.is_follow_up.return_value = True
+    query_rewriter.rewrite = AsyncMock(return_value=rewritten_question)
+
+    mock_critique_generator.generate.return_value = Critique.of(
+        answered=True, missing=[], next_query="", confidence=0.92
+    )
+
+    captured_gateway_commands = []
+    mock_llm_gateway = MagicMock(spec=LlmGatewayService)
+
+    async def fake_stream(gw_cmd) -> AsyncIterator[str]:
+        captured_gateway_commands.append(gw_cmd)
+        yield "직접 전달된 이력 기반 답변입니다."
+
+    mock_llm_gateway.stream.side_effect = fake_stream
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=session_repo,
+        query_rewriter=query_rewriter,
+    )
+
+    original_question = "그것들의 설정 절차와 보관 주기를 비교해 줘"
+    command = AgenticAskCommand(
+        question=original_question,
+        budget=IterationBudget.of(max_iterations=2, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+        session_id="session-should-not-be-queried",
+        conversation_history=provided_history,
+    )
+
+    _ = [c async for c in use_case.execute(command)]
+
+    session_repo.find_by_id.assert_not_awaited()
+    query_rewriter.is_follow_up.assert_called_once_with(original_question, provided_history)
+    query_rewriter.rewrite.assert_awaited_once_with(original_question, provided_history)
+
+    first_search_cmd = mock_hybrid_search.execute.await_args_list[0].args[0]
+    assert first_search_cmd.query == rewritten_question
+
+    assert len(captured_gateway_commands) == 1
+    roles_and_contents = [(m.role, m.content) for m in captured_gateway_commands[0].messages[1:]]
+    assert roles_and_contents == [
+        ("user", "엔터프라이즈 보안 정책 알려줘"),
+        ("assistant", "SSO와 감사 로그를 지원합니다."),
+        ("user", original_question),
+    ]
+
 
