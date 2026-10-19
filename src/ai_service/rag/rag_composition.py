@@ -161,6 +161,8 @@ async def build_rag_composition(
         query_refiner,
         rag_validator,
         secret_pii_scanner,
+        session_repo=session_repo,
+        query_rewriter=query_rewriter,
     )
 
     budget = IterationBudget.of(

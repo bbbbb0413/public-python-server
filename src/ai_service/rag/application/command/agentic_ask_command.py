@@ -18,4 +18,6 @@ class AgenticAskCommand:
     conversation_history: list[dict[str, str]] | None = None
     use_hyde: bool = False
     on_progress: ProgressCallback | None = None
+    session_id: str | None = None
+
 
