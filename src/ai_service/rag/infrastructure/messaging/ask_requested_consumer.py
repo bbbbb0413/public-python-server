@@ -137,6 +137,7 @@ class AskRequestedConsumer:
                     conversation_history=message.conversation_history,
                     use_hyde=use_hyde,
                     on_progress=on_progress,
+                    session_id=session.get_session_id() if session else None,
                 )
             )
         else:

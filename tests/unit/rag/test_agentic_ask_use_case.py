@@ -13,6 +13,9 @@ from ai_service.prompt.schemas import PromptTemplate
 from ai_service.prompt.service import PromptService
 from ai_service.rag.application.agentic_ask_use_case import AgenticAskUseCase
 from ai_service.rag.application.command.agentic_ask_command import AgenticAskCommand
+from ai_service.rag.application.conversational_query_rewriter_service import (
+    ConversationalQueryRewriter,
+)
 from ai_service.rag.application.critique_generator_service import CritiqueGeneratorService
 from ai_service.rag.application.filter.rag_content_validator import RagContentValidator
 from ai_service.rag.application.filter.secret_pii_scanner import SecretPiiScanner
@@ -21,7 +24,8 @@ from ai_service.rag.application.hybrid_search_use_case import (
     HybridSearchUseCase,
 )
 from ai_service.rag.application.query_refiner_service import QueryRefinerService
-from ai_service.rag.schemas import Critique, IterationBudget
+from ai_service.rag.repository import ConversationSessionRepository
+from ai_service.rag.schemas import ConversationSession, Critique, IterationBudget
 
 
 def _make_prompt_template(name: str = "rag-qa-system") -> PromptTemplate:
@@ -803,3 +807,227 @@ async def test_agentic_ask_multi_turn_lower_score_does_not_override_or_emit(
     # 1회차만 방출되고 2회차에서는 점수가 낮아 갱신되지 않으므로 방출되지 않음 (총 1회)
     assert len(sources_events) == 1
     assert sources_events[0][0]["score"] == 0.9
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_restores_session_history_and_rewrites_follow_up_query(
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    session = ConversationSession.create("user-1", "프리미엄 요금제 안내해 줘").append_turn(
+        "프리미엄 요금제 안내해 줘", "월 29,000원입니다."
+    )
+    session_repo = MagicMock(spec=ConversationSessionRepository)
+    session_repo.find_by_id = AsyncMock(return_value=session)
+
+    rewritten_question = "프리미엄 요금제의 환불 조건과 해지 절차를 비교해 줘"
+    query_rewriter = MagicMock(spec=ConversationalQueryRewriter)
+    query_rewriter.is_follow_up.return_value = True
+    query_rewriter.rewrite = AsyncMock(return_value=rewritten_question)
+
+    mock_critique_generator.generate.side_effect = [
+        Critique.of(
+            answered=False,
+            missing=["해지 위약금"],
+            next_query="프리미엄 요금제 해지 위약금",
+            confidence=0.5,
+        ),
+        Critique.of(answered=True, missing=[], next_query="", confidence=0.95),
+    ]
+
+    captured_gateway_commands = []
+    mock_llm_gateway = MagicMock(spec=LlmGatewayService)
+
+    async def fake_stream(gw_cmd) -> AsyncIterator[str]:
+        captured_gateway_commands.append(gw_cmd)
+        yield "비교 답변입니다."
+
+    mock_llm_gateway.stream.side_effect = fake_stream
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=session_repo,
+        query_rewriter=query_rewriter,
+    )
+
+    original_question = "거기서 환불 조건과 해지 절차를 비교해 줘"
+    command = AgenticAskCommand(
+        question=original_question,
+        budget=IterationBudget.of(max_iterations=3, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+        session_id=session.get_session_id(),
+        conversation_history=None,
+    )
+
+    _ = [c async for c in use_case.execute(command)]
+
+    session_repo.find_by_id.assert_awaited_once_with(session.get_session_id())
+    expected_history = [
+        {"role": "user", "content": "프리미엄 요금제 안내해 줘"},
+        {"role": "assistant", "content": "월 29,000원입니다."},
+    ]
+    query_rewriter.is_follow_up.assert_called_once_with(original_question, expected_history)
+    query_rewriter.rewrite.assert_awaited_once_with(original_question, expected_history)
+
+    first_search_cmd = mock_hybrid_search.execute.await_args_list[0].args[0]
+    assert first_search_cmd.query == rewritten_question
+
+    first_critique_args = mock_critique_generator.generate.await_args_list[0].args
+    assert first_critique_args[0] == rewritten_question
+
+    refine_args = mock_query_refiner.refine.call_args_list[0].args
+    assert refine_args[0] == rewritten_question
+
+    assert len(captured_gateway_commands) == 2
+    for gw_cmd in captured_gateway_commands:
+        roles_and_contents = [(m.role, m.content) for m in gw_cmd.messages[1:]]
+        assert roles_and_contents == [
+            ("user", "프리미엄 요금제 안내해 줘"),
+            ("assistant", "월 29,000원입니다."),
+            ("user", original_question),
+        ]
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_restores_session_history_without_rewrite_for_independent_question(
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    session = ConversationSession.create("user-1", "프리미엄 요금제 안내해 줘").append_turn(
+        "프리미엄 요금제 안내해 줘", "월 29,000원입니다."
+    )
+    session_repo = MagicMock(spec=ConversationSessionRepository)
+    session_repo.find_by_id = AsyncMock(return_value=session)
+
+    query_rewriter = MagicMock(spec=ConversationalQueryRewriter)
+    query_rewriter.is_follow_up.return_value = False
+    query_rewriter.rewrite = AsyncMock()
+
+    mock_critique_generator.generate.return_value = Critique.of(
+        answered=True, missing=[], next_query="", confidence=0.9
+    )
+
+    captured_gateway_commands = []
+    mock_llm_gateway = MagicMock(spec=LlmGatewayService)
+
+    async def fake_stream(gw_cmd) -> AsyncIterator[str]:
+        captured_gateway_commands.append(gw_cmd)
+        yield "독립 질문 답변입니다."
+
+    mock_llm_gateway.stream.side_effect = fake_stream
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=session_repo,
+        query_rewriter=query_rewriter,
+    )
+
+    independent_question = "기본 요금제와 엔터프라이즈 요금제의 차이를 비교해 줘"
+    command = AgenticAskCommand(
+        question=independent_question,
+        budget=IterationBudget.of(max_iterations=2, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+        session_id=session.get_session_id(),
+    )
+
+    _ = [c async for c in use_case.execute(command)]
+
+    query_rewriter.rewrite.assert_not_awaited()
+    first_search_cmd = mock_hybrid_search.execute.await_args_list[0].args[0]
+    assert first_search_cmd.query == independent_question
+
+    assert len(captured_gateway_commands) == 1
+    roles_and_contents = [(m.role, m.content) for m in captured_gateway_commands[0].messages[1:]]
+    assert roles_and_contents == [
+        ("user", "프리미엄 요금제 안내해 줘"),
+        ("assistant", "월 29,000원입니다."),
+        ("user", independent_question),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("session_state", ["missing", "empty_turns"])
+async def test_agentic_ask_handles_missing_or_empty_session_gracefully(
+    session_state: str,
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    session_repo = MagicMock(spec=ConversationSessionRepository)
+    if session_state == "missing":
+        session_repo.find_by_id = AsyncMock(return_value=None)
+    else:
+        empty_session = ConversationSession.create("user-1", "첫 질문")
+        session_repo.find_by_id = AsyncMock(return_value=empty_session)
+
+    query_rewriter = MagicMock(spec=ConversationalQueryRewriter)
+    query_rewriter.is_follow_up.return_value = False
+    query_rewriter.rewrite = AsyncMock()
+
+    mock_critique_generator.generate.return_value = Critique.of(
+        answered=True, missing=[], next_query="", confidence=0.9
+    )
+
+    captured_gateway_commands = []
+    mock_llm_gateway = MagicMock(spec=LlmGatewayService)
+
+    async def fake_stream(gw_cmd) -> AsyncIterator[str]:
+        captured_gateway_commands.append(gw_cmd)
+        yield "첫 질문 답변입니다."
+
+    mock_llm_gateway.stream.side_effect = fake_stream
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=session_repo,
+        query_rewriter=query_rewriter,
+    )
+
+    question = "거기서 환불 조건과 해지 절차를 비교해 줘"
+    command = AgenticAskCommand(
+        question=question,
+        budget=IterationBudget.of(max_iterations=2, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+        session_id="session-empty-or-missing",
+    )
+
+    chunks = [c async for c in use_case.execute(command)]
+    assert "".join(chunks) == "첫 질문 답변입니다."
+
+    query_rewriter.rewrite.assert_not_awaited()
+    first_search_cmd = mock_hybrid_search.execute.await_args_list[0].args[0]
+    assert first_search_cmd.query == question
+
+    assert len(captured_gateway_commands) == 1
+    roles_and_contents = [(m.role, m.content) for m in captured_gateway_commands[0].messages[1:]]
+    assert roles_and_contents == [("user", question)]
+

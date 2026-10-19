@@ -15,11 +15,15 @@ from ai_service.rag.application.command.agentic_ask_command import (
     ProgressCallback,
 )
 from ai_service.rag.application.command.hybrid_search_command import HybridSearchCommand
+from ai_service.rag.application.conversational_query_rewriter_service import (
+    ConversationalQueryRewriter,
+)
 from ai_service.rag.application.critique_generator_service import CritiqueGeneratorService
 from ai_service.rag.application.filter.rag_content_validator import RagContentValidator
 from ai_service.rag.application.filter.secret_pii_scanner import SecretPiiScanner
 from ai_service.rag.application.hybrid_search_use_case import HybridSearchUseCase
 from ai_service.rag.application.query_refiner_service import QueryRefinerService
+from ai_service.rag.repository import ConversationSessionRepository
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +48,8 @@ class AgenticAskUseCase:
         rag_validator: RagContentValidator,
         secret_pii_scanner: SecretPiiScanner,
         on_progress: ProgressCallback | None = None,
+        session_repo: ConversationSessionRepository | Any | None = None,
+        query_rewriter: ConversationalQueryRewriter | None = None,
     ) -> None:
         self._hybrid_search = hybrid_search
         self._llm_gateway = llm_gateway
@@ -53,12 +59,31 @@ class AgenticAskUseCase:
         self._rag_validator = rag_validator
         self._secret_pii_scanner = secret_pii_scanner
         self._on_progress = on_progress
+        self._session_repo = session_repo
+        self._query_rewriter = query_rewriter
 
     async def execute(self, command: AgenticAskCommand) -> AsyncIterator[str]:
         callback = command.on_progress or self._on_progress
         tenant = command.tenant or DEFAULT_TENANT
         start_time = time.monotonic()
-        current_query = command.question
+
+        conversation_history = command.conversation_history
+        if not conversation_history and command.session_id and self._session_repo is not None:
+            session = await self._session_repo.find_by_id(command.session_id)
+            if session:
+                conversation_history = session.get_history()
+
+        search_question = command.question
+        if (
+            conversation_history
+            and self._query_rewriter is not None
+            and self._query_rewriter.is_follow_up(command.question, conversation_history)
+        ):
+            search_question = await self._query_rewriter.rewrite(
+                command.question, conversation_history
+            )
+
+        current_query = search_question
         tokens_used = 0
 
         iteration = 1
@@ -107,7 +132,7 @@ class AgenticAskUseCase:
                 yield "\n\n"
 
             messages = await self._build_messages(
-                command.question, chunks, command.user_id, command.conversation_history
+                command.question, chunks, command.user_id, conversation_history
             )
             collected: list[str] = []
             budget_exhausted = False
@@ -141,7 +166,7 @@ class AgenticAskUseCase:
             )
 
             critique = await self._critique_generator.generate(
-                command.question, raw, chunks, tenant
+                search_question, raw, chunks, tenant
             )
             last_confidence = critique.get_confidence()
             last_missing = critique.get_missing()
@@ -156,7 +181,7 @@ class AgenticAskUseCase:
                 callback, iteration, "refining", last_confidence, last_missing
             )
 
-            current_query = self._query_refiner.refine(command.question, critique)
+            current_query = self._query_refiner.refine(search_question, critique)
             iteration += 1
 
     async def _emit_progress(
