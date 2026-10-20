@@ -157,6 +157,13 @@ async def test_세션서비스_북마크_변경을_소유자세션에만_적용�
     )
     repo.update.assert_awaited_once()
 
+    repo.find_by_id_for_user = AsyncMock(return_value=toggled)
+    explicit_off = await service.set_bookmark(
+        session.get_session_id(), "user-1", False
+    )
+    assert explicit_off.is_bookmarked is False
+
+
 
 async def test_세션서비스_남의_세션_북마크_변경시_SessionNotFoundError() -> None:
     repo = MagicMock(spec=ConversationSessionRepository)
