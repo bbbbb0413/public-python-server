@@ -286,3 +286,120 @@ async def test_get_sessions_list_empty_result_returns_empty_list() -> None:
     assert response.json() == []
     repo_mock.find_by_user_id.assert_awaited_once_with("user-1", 1, 10, "존재하지않는제목")
 
+
+async def test_get_sessions_list_passes_q_param_and_returns_is_bookmarked() -> None:
+    now = datetime.now(UTC)
+    session = ConversationSession.restore(
+        RestoreProps(
+            session_id="session-1",
+            user_id="user-1",
+            title="매출 보고서 분석",
+            turns=[TurnRecord(role="user", content="질문", created_at=now)],
+            created_at=now,
+            updated_at=now,
+            is_bookmarked=True,
+        )
+    )
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+    repo_mock.find_by_user_id = AsyncMock(return_value=[session])
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/rag/sessions?userId=user-1&page=1&limit=50&q=매출")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["sessionId"] == "session-1"
+    assert body[0]["title"] == "매출 보고서 분석"
+    assert body[0]["isBookmarked"] is True
+    repo_mock.find_by_user_id.assert_awaited_once_with("user-1", 1, 50, "매출")
+
+
+async def test_patch_session_bookmark_sets_explicit_and_toggles() -> None:
+    now = datetime.now(UTC)
+    session = ConversationSession.restore(
+        RestoreProps(
+            session_id="session-1",
+            user_id="user-1",
+            title="북마크 테스트",
+            turns=[],
+            created_at=now,
+            updated_at=now,
+            is_bookmarked=False,
+        )
+    )
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+    repo_mock.find_by_id_for_user = AsyncMock(return_value=session)
+    repo_mock.update = AsyncMock(side_effect=lambda s: s)
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res_explicit = await client.patch(
+            "/rag/sessions/session-1/bookmark?userId=user-1",
+            json={"bookmarked": True},
+        )
+        res_toggle = await client.patch(
+            "/rag/sessions/session-1/bookmark?userId=user-1",
+        )
+
+    assert res_explicit.status_code == 200
+    assert res_explicit.json() == {"sessionId": "session-1", "bookmarked": True}
+    assert res_toggle.status_code == 200
+    assert res_toggle.json() == {"sessionId": "session-1", "bookmarked": True}
+
+
+async def test_post_and_delete_session_bookmark() -> None:
+    now = datetime.now(UTC)
+    session = ConversationSession.restore(
+        RestoreProps(
+            session_id="session-1",
+            user_id="user-1",
+            title="북마크 등록/해제",
+            turns=[],
+            created_at=now,
+            updated_at=now,
+            is_bookmarked=False,
+        )
+    )
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+    repo_mock.find_by_id_for_user = AsyncMock(return_value=session)
+    repo_mock.update = AsyncMock(side_effect=lambda s: s)
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        post_res = await client.post("/rag/sessions/session-1/bookmark?userId=user-1")
+        delete_res = await client.delete("/rag/sessions/session-1/bookmark?userId=user-1")
+
+    assert post_res.status_code == 200
+    assert post_res.json() == {"sessionId": "session-1", "bookmarked": True}
+    assert delete_res.status_code == 204
+
+
+async def test_bookmark_routes_return_indistinguishable_404_for_other_or_missing_session() -> None:
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+    repo_mock.find_by_id_for_user = AsyncMock(return_value=None)
+    repo_mock.update = AsyncMock()
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        patch_res = await client.patch(
+            "/rag/sessions/other-session/bookmark?userId=user-1",
+            json={"bookmarked": True},
+        )
+        post_res = await client.post("/rag/sessions/other-session/bookmark?userId=user-1")
+        delete_res = await client.delete("/rag/sessions/missing-session/bookmark?userId=user-1")
+
+    assert patch_res.status_code == 404
+    assert post_res.status_code == 404
+    assert delete_res.status_code == 404
+    assert patch_res.json() == {"detail": "대화 세션을 찾을 수 없습니다."}
+    assert post_res.json() == patch_res.json()
+    assert delete_res.json() == patch_res.json()
+    repo_mock.update.assert_not_awaited()
+
+

@@ -33,5 +33,16 @@ class SessionService:
         if not deleted:
             raise SessionNotFoundError(session_id)
 
+    async def set_bookmark(
+        self, session_id: str, user_id: str, bookmarked: bool | None = None
+    ) -> ConversationSession:
+        session = await self._repo.find_by_id_for_user(session_id, user_id)
+        if session is None:
+            raise SessionNotFoundError(session_id)
+        target_state = (not session.is_bookmarked) if bookmarked is None else bookmarked
+        updated = session.with_bookmark(target_state)
+        await self._repo.update(updated)
+        return updated
+
 
 __all__ = ["SessionNotFoundError", "SessionService"]

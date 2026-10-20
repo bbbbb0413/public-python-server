@@ -69,7 +69,13 @@ class ConversationSessionRepository:
         record = self._to_record(session)
         await self._collection.update_one(
             {"sessionId": session.get_session_id()},
-            {"$set": {"turns": record["turns"], "updatedAt": record["updatedAt"]}},
+            {
+                "$set": {
+                    "turns": record["turns"],
+                    "updatedAt": record["updatedAt"],
+                    "isBookmarked": record["isBookmarked"],
+                }
+            },
         )
         return session
 
@@ -110,6 +116,7 @@ class ConversationSessionRepository:
                 ],
                 created_at=record["createdAt"],
                 updated_at=record["updatedAt"],
+                is_bookmarked=bool(record.get("isBookmarked", False)),
             )
         )
 
@@ -139,6 +146,7 @@ class ConversationSessionRepository:
             "turns": turns_data,
             "createdAt": session.created_at,
             "updatedAt": session.updated_at,
+            "isBookmarked": session.is_bookmarked,
         }
 
 

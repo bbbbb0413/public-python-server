@@ -6,8 +6,11 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from ai_service.rag.repository import ConversationSessionRepository
-from ai_service.rag.service import SessionService
+from ai_service.rag.schemas import ConversationSession
+from ai_service.rag.service import SessionNotFoundError, SessionService
 
 
 def _make_repo() -> tuple[ConversationSessionRepository, MagicMock]:
@@ -118,5 +121,53 @@ async def test_세션서비스_목록조회가_리포지토리에_키워드를_�
 
     assert result == []
     repo.find_by_user_id.assert_awaited_once_with("user-1", 1, 10, "매출")
+
+
+async def test_업데이트가_turns와_updatedAt과_isBookmarked를_함께_갱신한다() -> None:
+    repo, collection = _make_repo()
+    collection.update_one = AsyncMock()
+    session = ConversationSession.create("user-1", "질문").with_bookmark(True)
+
+    await repo.update(session)
+
+    collection.update_one.assert_awaited_once_with(
+        {"sessionId": session.get_session_id()},
+        {
+            "$set": {
+                "turns": [],
+                "updatedAt": session.updated_at,
+                "isBookmarked": True,
+            }
+        },
+    )
+
+
+async def test_세션서비스_북마크_변경을_소유자세션에만_적용하고_토글한다() -> None:
+    repo = MagicMock(spec=ConversationSessionRepository)
+    session = ConversationSession.create("user-1", "질문")
+    repo.find_by_id_for_user = AsyncMock(return_value=session)
+    repo.update = AsyncMock(side_effect=lambda s: s)
+    service = SessionService(repo)
+
+    toggled = await service.set_bookmark(session.get_session_id(), "user-1")
+
+    assert toggled.is_bookmarked is True
+    repo.find_by_id_for_user.assert_awaited_once_with(
+        session.get_session_id(), "user-1"
+    )
+    repo.update.assert_awaited_once()
+
+
+async def test_세션서비스_남의_세션_북마크_변경시_SessionNotFoundError() -> None:
+    repo = MagicMock(spec=ConversationSessionRepository)
+    repo.find_by_id_for_user = AsyncMock(return_value=None)
+    repo.update = AsyncMock()
+    service = SessionService(repo)
+
+    with pytest.raises(SessionNotFoundError):
+        await service.set_bookmark("other-session", "user-1", True)
+
+    repo.update.assert_not_awaited()
+
 
 
