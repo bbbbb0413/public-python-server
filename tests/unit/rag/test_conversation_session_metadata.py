@@ -7,6 +7,7 @@ from ai_service.rag.schemas import (
     ConversationTurn,
     RestoreProps,
     SessionDetailOut,
+    SessionOut,
     TurnOut,
     TurnRecord,
 )
@@ -204,3 +205,30 @@ def test_dto_serialization_with_metadata():
     assert detail_data["turns"][1]["confidence"] == 0.85
     assert detail_data["turns"][1]["missing"] == ["누락정보"]
     assert detail_data["turns"][1]["iterations"] == 2
+
+
+def test_conversation_session_bookmark_lifecycle_and_legacy_restore():
+    created = ConversationSession.create("user-1", "첫 질문")
+    assert created.is_bookmarked is False
+
+    bookmarked = created.with_bookmark(True)
+    assert bookmarked.is_bookmarked is True
+    assert bookmarked.get_session_id() == created.get_session_id()
+
+    appended = bookmarked.append_turn("질문", "답변")
+    assert appended.is_bookmarked is True
+
+    record = ConversationSessionRepository._to_record(appended)
+    assert record["isBookmarked"] is True
+
+    restored = ConversationSessionRepository._to_domain(record)
+    assert restored.is_bookmarked is True
+
+    legacy_record = dict(record)
+    legacy_record.pop("isBookmarked")
+    restored_legacy = ConversationSessionRepository._to_domain(legacy_record)
+    assert restored_legacy.is_bookmarked is False
+
+    out = SessionOut.from_domain(restored).model_dump(by_alias=True)
+    assert out["isBookmarked"] is True
+

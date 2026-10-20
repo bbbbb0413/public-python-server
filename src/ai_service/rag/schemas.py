@@ -118,6 +118,7 @@ class RestoreProps:
     turns: list[TurnRecord]
     created_at: datetime
     updated_at: datetime
+    is_bookmarked: bool = False
 
 
 class ConversationSession:
@@ -129,6 +130,7 @@ class ConversationSession:
         turns: list[ConversationTurn],
         created_at: datetime,
         updated_at: datetime,
+        is_bookmarked: bool = False,
     ) -> None:
         self._session_id = session_id
         self._user_id = user_id
@@ -136,12 +138,13 @@ class ConversationSession:
         self._turns = turns
         self._created_at = created_at
         self._updated_at = updated_at
+        self._is_bookmarked = is_bookmarked
 
     @classmethod
     def create(cls, user_id: str, first_question: str) -> "ConversationSession":
         now = datetime.now(UTC)
         title = first_question[:MAX_TITLE_LENGTH]
-        return cls(SessionId.generate(), user_id, title, [], now, now)
+        return cls(SessionId.generate(), user_id, title, [], now, now, False)
 
     @classmethod
     def restore(cls, props: RestoreProps) -> "ConversationSession":
@@ -166,6 +169,7 @@ class ConversationSession:
             turns,
             props.created_at,
             props.updated_at,
+            props.is_bookmarked,
         )
 
     def append_turn(
@@ -195,6 +199,18 @@ class ConversationSession:
             new_turns,
             self._created_at,
             datetime.now(UTC),
+            self._is_bookmarked,
+        )
+
+    def with_bookmark(self, bookmarked: bool) -> "ConversationSession":
+        return ConversationSession(
+            self._session_id,
+            self._user_id,
+            self._title,
+            list(self._turns),
+            self._created_at,
+            self._updated_at,
+            bookmarked,
         )
 
     def get_history(self) -> list[dict[str, str]]:
@@ -221,6 +237,10 @@ class ConversationSession:
     @property
     def updated_at(self) -> datetime:
         return self._updated_at
+
+    @property
+    def is_bookmarked(self) -> bool:
+        return self._is_bookmarked
 
 
 @dataclass(frozen=True)
@@ -374,6 +394,7 @@ class SessionOut(BaseModel):
 
     session_id: str = Field(alias="sessionId")
     title: str
+    is_bookmarked: bool = Field(default=False, alias="isBookmarked")
     updated_at: datetime = Field(alias="updatedAt")
 
     @classmethod
@@ -381,8 +402,22 @@ class SessionOut(BaseModel):
         return cls(
             sessionId=session.get_session_id(),
             title=session.title,
+            isBookmarked=session.is_bookmarked,
             updatedAt=session.updated_at,
         )
+
+
+class ToggleBookmarkIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    bookmarked: bool | None = None
+
+
+class SessionBookmarkOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str = Field(alias="sessionId")
+    bookmarked: bool
 
 
 class SessionDetailOut(BaseModel):
@@ -417,12 +452,14 @@ __all__ = [
     "IterationBudgetProps",
     "MAX_TITLE_LENGTH",
     "RestoreProps",
+    "SessionBookmarkOut",
     "SessionDetailOut",
     "SessionId",
     "SessionOut",
     "SessionTurnOut",
     "SimilarityThreshold",
     "SourceRefOut",
+    "ToggleBookmarkIn",
     "TurnOut",
     "TurnRecord",
     "TurnValue",
