@@ -1114,3 +1114,234 @@ async def test_ask_requested_consumer_complex_passes_none_session_id_when_sessio
     assert captured_commands[0].session_id is None
 
 
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_complex_exhausted_budget_publishes_fallback():
+    # 수용 기준 2 엔드투엔드(Consumer + AgenticAskUseCase) 검증:
+    # 1회차 실행 중 지식 문서 청크 2건(0.85, 0.72) 검색 후 예산 소진으로 조기 종료 시
+    # confidence=0.85, missing=["답변 검증 예산 소진으로 상세 비평 생략"]이
+    # progress 이벤트, done 이벤트, 세션 저장에 온전하게 반영되는지 확인
+    from ai_service.knowledge.schemas import (
+        SimilaritySearchResult,
+        VectorDocumentMetadata,
+    )
+    from ai_service.prompt.schemas import PromptTemplate
+    from ai_service.prompt.service import PromptService
+    from ai_service.rag.application.critique_generator_service import (
+        CritiqueGeneratorService,
+    )
+    from ai_service.rag.application.hybrid_search_use_case import (
+        HybridSearchResult,
+        HybridSearchUseCase,
+    )
+    from ai_service.rag.application.query_refiner_service import QueryRefinerService
+
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+
+    chunks = [
+        SimilaritySearchResult(
+            text="문서 내용 1",
+            score=0.72,
+            metadata=VectorDocumentMetadata(document_id="doc-1", file_name="f1.pdf", chunk_index=0),
+        ),
+        SimilaritySearchResult(
+            text="문서 내용 2",
+            score=0.85,
+            metadata=VectorDocumentMetadata(document_id="doc-2", file_name="f2.pdf", chunk_index=1),
+        ),
+    ]
+
+    mock_hybrid_search = AsyncMock(spec=HybridSearchUseCase)
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=chunks, query_embedding=[0.1, 0.2]
+    )
+
+    mock_llm_gateway = MagicMock()
+
+    async def fake_stream(_command) -> AsyncIterator[str]:
+        yield "답변 내용입니다.\n"
+
+    mock_llm_gateway.stream.side_effect = fake_stream
+
+    mock_prompt_service = AsyncMock(spec=PromptService)
+    mock_prompt_service.execute.return_value = PromptTemplate.create(
+        "rag-qa-system",
+        "Context: {{context}}",
+        ["context"],
+    )
+
+    mock_critique = AsyncMock(spec=CritiqueGeneratorService)
+    mock_refiner = MagicMock(spec=QueryRefinerService)
+
+    agentic_use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_prompt_service,
+        critique_generator=mock_critique,
+        query_refiner=mock_refiner,
+        rag_validator=RagContentValidator(),
+        secret_pii_scanner=SecretPiiScanner(),
+    )
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "complex"
+
+    session = ConversationSession.create("user-1", "복합 질문")
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id = AsyncMock(return_value=session)
+    session_repo_mock.persist = AsyncMock(return_value=session)
+    session_repo_mock.update = AsyncMock(return_value=None)
+
+    composition = RagComposition(
+        ask_use_case=MagicMock(spec=AskUseCase),
+        agentic_ask_use_case=agentic_use_case,
+        query_complexity_router=router_mock,
+        rag_validator=RagContentValidator(),
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(max_iterations=1, token_budget=1, timeout_ms=5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    message = AskRequestedMessage(
+        job_id="test-job-fallback-confidence",
+        user_id="user-1",
+        question="1회차 예산 소진 복합 질문",
+        session_id=session.get_session_id(),
+    )
+
+    await consumer._process(message)
+
+    # 1. progress 이벤트 확인
+    progress_calls = [
+        call for call in redis_mock.xadd.await_args_list if call.args[1].get("type") == "progress"
+    ]
+    assert len(progress_calls) >= 2
+    last_progress = json.loads(progress_calls[-1].args[1]["data"])
+    assert last_progress["confidence"] == 0.85
+    assert last_progress["missing"] == ["답변 검증 예산 소진으로 상세 비평 생략"]
+
+    # 2. done 이벤트 확인
+    done_calls = [
+        call for call in redis_mock.xadd.await_args_list if call.args[1].get("type") == "done"
+    ]
+    assert len(done_calls) == 1
+    done_data = json.loads(done_calls[0].args[1]["data"])
+    assert done_data["confidence"] == 0.85
+    assert done_data["missing"] == ["답변 검증 예산 소진으로 상세 비평 생략"]
+    assert done_data["iterations"] == 1
+
+    # 3. session.append_turn 저장 확인
+    session_repo_mock.update.assert_awaited_once()
+    updated_session: ConversationSession = session_repo_mock.update.await_args.args[0]
+    last_turn = updated_session.turns[-1]
+    assert last_turn.confidence == 0.85
+    assert last_turn.missing == ["답변 검증 예산 소진으로 상세 비평 생략"]
+    assert last_turn.iterations == 1
+
+
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_complex_exhausted_budget_no_chunks_zero_confidence():
+    # 수용 기준 3 엔드투엔드 검증: 청크가 0건이고 예산 소진 시 confidence=0.0, 사유 반영 확인
+    from ai_service.prompt.schemas import PromptTemplate
+    from ai_service.prompt.service import PromptService
+    from ai_service.rag.application.critique_generator_service import (
+        CritiqueGeneratorService,
+    )
+    from ai_service.rag.application.hybrid_search_use_case import (
+        HybridSearchResult,
+        HybridSearchUseCase,
+    )
+    from ai_service.rag.application.query_refiner_service import QueryRefinerService
+
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+
+    mock_hybrid_search = AsyncMock(spec=HybridSearchUseCase)
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=[], query_embedding=[0.1, 0.2]
+    )
+
+    mock_llm_gateway = MagicMock()
+
+    async def fake_stream(_command) -> AsyncIterator[str]:
+        yield "문서 없이 생성된 답변.\n"
+
+    mock_llm_gateway.stream.side_effect = fake_stream
+
+    mock_prompt_service = AsyncMock(spec=PromptService)
+    mock_prompt_service.execute.return_value = PromptTemplate.create(
+        "rag-qa-system",
+        "Context: {{context}}",
+        ["context"],
+    )
+
+    mock_critique = AsyncMock(spec=CritiqueGeneratorService)
+    mock_refiner = MagicMock(spec=QueryRefinerService)
+
+    agentic_use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_prompt_service,
+        critique_generator=mock_critique,
+        query_refiner=mock_refiner,
+        rag_validator=RagContentValidator(),
+        secret_pii_scanner=SecretPiiScanner(),
+    )
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "complex"
+
+    session = ConversationSession.create("user-1", "문서 없는 복합 질문")
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id = AsyncMock(return_value=session)
+    session_repo_mock.persist = AsyncMock(return_value=session)
+    session_repo_mock.update = AsyncMock(return_value=None)
+
+    composition = RagComposition(
+        ask_use_case=MagicMock(spec=AskUseCase),
+        agentic_ask_use_case=agentic_use_case,
+        query_complexity_router=router_mock,
+        rag_validator=RagContentValidator(),
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(max_iterations=1, token_budget=1, timeout_ms=5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    message = AskRequestedMessage(
+        job_id="test-job-no-chunks-exhausted",
+        user_id="user-1",
+        question="문서 없는 1회차 예산 소진 복합 질문",
+        session_id=session.get_session_id(),
+    )
+
+    await consumer._process(message)
+
+    done_calls = [
+        call for call in redis_mock.xadd.await_args_list if call.args[1].get("type") == "done"
+    ]
+    assert len(done_calls) == 1
+    done_data = json.loads(done_calls[0].args[1]["data"])
+    assert done_data["confidence"] == 0.0
+    assert done_data["missing"] == ["관련 지식베이스 문서를 찾지 못함"]
+    assert done_data["iterations"] == 1
+
+
+

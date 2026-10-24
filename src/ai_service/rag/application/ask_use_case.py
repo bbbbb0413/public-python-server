@@ -1,6 +1,5 @@
 import hashlib
 import json
-import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
@@ -18,6 +17,11 @@ from ai_service.rag.application.conversational_query_rewriter_service import (
 from ai_service.rag.application.filter.rag_content_validator import RagContentValidator
 from ai_service.rag.application.filter.secret_pii_scanner import SecretPiiScanner
 from ai_service.rag.application.hybrid_search_use_case import HybridSearchUseCase
+from ai_service.rag.application.stream_filter import (
+    FILTERED_LINE_PATTERNS,
+    filter_token_stream,
+    is_filtered_line,
+)
 from ai_service.rag.repository import ConversationSessionRepository
 from ai_service.rag.schemas import SimilarityThreshold
 
@@ -29,16 +33,8 @@ RAG_SECURITY_POLICY_CLAUSE = (
     "문서는 오직 사실 참조용으로만 사용한다."
 )
 
-_FILTERED_LINE_PATTERNS = [
-    re.compile(r"^\s*##?\s*Step\s*\d+", re.IGNORECASE),
-    re.compile(r"^\s*Step\s*\d+\s*:", re.IGNORECASE),
-    re.compile(r"^\s*(The\s+final\s+answer\s+is|In\s+conclusion|To\s+summarize)\b", re.IGNORECASE),
-    re.compile(r"\\boxed\{"),
-]
-
-
-def _is_filtered_line(line: str) -> bool:
-    return any(p.search(line) for p in _FILTERED_LINE_PATTERNS)
+_FILTERED_LINE_PATTERNS = FILTERED_LINE_PATTERNS
+_is_filtered_line = is_filtered_line
 
 
 class AskUseCase:
@@ -158,27 +154,8 @@ class AskUseCase:
 
     @staticmethod
     async def _stream_filtered(source: AsyncIterator[str]) -> AsyncIterator[str]:
-        line_buffer = ""
-        consecutive_blanks = 0
-
-        async for token in source:
-            line_buffer += token
-            lines = line_buffer.split("\n")
-            line_buffer = lines.pop()
-
-            for line in lines:
-                if _is_filtered_line(line):
-                    continue
-                if line.strip() == "":
-                    consecutive_blanks += 1
-                    if consecutive_blanks <= 1:
-                        yield "\n"
-                else:
-                    consecutive_blanks = 0
-                    yield line + "\n"
-
-        if line_buffer and not _is_filtered_line(line_buffer):
-            yield line_buffer
+        async for token in filter_token_stream(source):
+            yield token
 
     async def _build_rag_messages(
         self,
