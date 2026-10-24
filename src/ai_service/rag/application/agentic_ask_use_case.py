@@ -174,7 +174,7 @@ class AgenticAskUseCase:
 
             elapsed_ms = (time.monotonic() - start_time) * 1000
             if budget_exhausted or command.budget.is_exhausted(iteration, tokens_used, elapsed_ms):
-                if last_confidence == 0.0:
+                if iteration == 1:
                     if chunks:
                         last_confidence = max(c.score for c in chunks)
                         last_missing = ["답변 검증 예산 소진으로 상세 비평 생략"]

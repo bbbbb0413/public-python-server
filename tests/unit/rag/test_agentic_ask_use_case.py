@@ -1338,4 +1338,130 @@ async def test_agentic_ask_preserves_previous_confidence_when_exhausted_in_subse
     assert final_event["missing"] == ["추가 보충 필요 항목"]
 
 
+@pytest.mark.asyncio
+async def test_agentic_ask_streams_exact_acceptance_criterion_1(
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    # 수용 기준 1 전용 검증:
+    # Given 복합 질문에 대해 LLM Gateway가
+    # `Step 1: 분석\n\n문서 내용에 따르면 정답입니다.\nThe final answer is 정답` 생성 시
+    # When AgenticAskUseCase.execute를 통해 스트리밍을 수신하면
+    # Then 추론 라인은 방출되지 않고 정제된 답변 본문만 방출되어야 한다.
+    raw_tokens = [
+        "Step 1: 분석\n",
+        "\n",
+        "문서 내용에 따르면 정답입니다.\n",
+        "The final answer is 정답",
+    ]
+    mock_llm_gateway = MagicMock(spec=LlmGatewayService)
+
+    async def fake_stream(_command) -> AsyncIterator[str]:
+        for t in raw_tokens:
+            yield t
+
+    mock_llm_gateway.stream.side_effect = fake_stream
+
+    mock_critique_generator.generate.return_value = Critique.of(
+        answered=True, missing=[], next_query="", confidence=0.95
+    )
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+    )
+
+    command = AgenticAskCommand(
+        question="복합 질문 수용 기준 1",
+        budget=IterationBudget.of(max_iterations=1, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+    )
+
+    streamed_tokens = [c async for c in use_case.execute(command)]
+    emitted_text = "".join(streamed_tokens)
+
+    assert "Step 1: 분석" not in emitted_text
+    assert "The final answer is 정답" not in emitted_text
+    assert emitted_text.strip() == "문서 내용에 따르면 정답입니다."
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_preserves_zero_confidence_from_previous_critique_when_exhausted(
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    # 2회차 이상에서 1회차 비평 신뢰도가 0.0이었을 때도 청크 점수로 왜곡되지 않고 보존되는지 검증
+    chunks = [
+        SimilaritySearchResult(
+            text="청크 내용 1",
+            score=0.92,
+            metadata=VectorDocumentMetadata(document_id="doc-1", file_name="f1.pdf", chunk_index=0),
+        )
+    ]
+    mock_hybrid_search = AsyncMock(spec=HybridSearchUseCase)
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=chunks, query_embedding=[0.1, 0.2]
+    )
+
+    # 1회차 비평에서 0.0과 사유 산출
+    mock_critique_generator.generate.return_value = Critique.of(
+        answered=False,
+        missing=["질문과 무관한 오답"],
+        next_query="보충 쿼리",
+        confidence=0.0,
+    )
+
+    mock_llm_gateway = MagicMock(spec=LlmGatewayService)
+
+    async def fake_stream(_command) -> AsyncIterator[str]:
+        yield "생성된 답변 라인\n"
+
+    mock_llm_gateway.stream.side_effect = fake_stream
+
+    events: list[dict] = []
+
+    async def on_progress(data: dict) -> None:
+        events.append(data)
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        on_progress=on_progress,
+    )
+
+    command = AgenticAskCommand(
+        question="2회차 예산 소진 시 0.0 보존 질문",
+        budget=IterationBudget.of(max_iterations=2, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+    )
+
+    _ = [c async for c in use_case.execute(command)]
+
+    final_event = events[-1]
+    assert final_event["iteration"] == 2
+    assert final_event["phase"] == "generating"
+    # 1회차 비평의 0.0과 missing이 그대로 유지되어야 함
+    # (청크 최고점인 0.92나 비평 생략 안내로 덮어써지지 않아야 함)
+    assert final_event["confidence"] == 0.0
+    assert final_event["missing"] == ["질문과 무관한 오답"]
+
+
+
 
