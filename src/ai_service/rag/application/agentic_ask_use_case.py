@@ -23,6 +23,7 @@ from ai_service.rag.application.filter.rag_content_validator import RagContentVa
 from ai_service.rag.application.filter.secret_pii_scanner import SecretPiiScanner
 from ai_service.rag.application.hybrid_search_use_case import HybridSearchUseCase
 from ai_service.rag.application.query_refiner_service import QueryRefinerService
+from ai_service.rag.application.stream_filter import filter_token_stream
 from ai_service.rag.repository import ConversationSessionRepository
 
 logger = logging.getLogger(__name__)
@@ -136,9 +137,26 @@ class AgenticAskUseCase:
             )
             collected: list[str] = []
             budget_exhausted = False
-            async for token in self._llm_gateway.stream(
-                GatewayCallCommand(messages, RAG_PROMPT_NAME, tenant)
-            ):
+
+            async def _stream_with_budget(
+                msgs: list[LlmMessage] = messages,
+                it: int = iteration,
+                used_tokens: int = tokens_used,
+            ) -> AsyncIterator[str]:
+                nonlocal budget_exhausted
+                raw_chars = 0
+                async for raw_token in self._llm_gateway.stream(
+                    GatewayCallCommand(msgs, RAG_PROMPT_NAME, tenant)
+                ):
+                    raw_chars += len(raw_token)
+                    cur_tok = -(-raw_chars // APPROX_CHARS_PER_TOKEN)
+                    el_ms = (time.monotonic() - start_time) * 1000
+                    yield raw_token
+                    if command.budget.is_exhausted(it - 1, used_tokens + cur_tok, el_ms):
+                        budget_exhausted = True
+                        break
+
+            async for token in filter_token_stream(_stream_with_budget()):
                 masked_token = self._secret_pii_scanner.mask(token)
                 collected.append(token)
                 yield masked_token
@@ -156,6 +174,13 @@ class AgenticAskUseCase:
 
             elapsed_ms = (time.monotonic() - start_time) * 1000
             if budget_exhausted or command.budget.is_exhausted(iteration, tokens_used, elapsed_ms):
+                if last_confidence == 0.0:
+                    if chunks:
+                        last_confidence = max(c.score for c in chunks)
+                        last_missing = ["답변 검증 예산 소진으로 상세 비평 생략"]
+                    else:
+                        last_confidence = 0.0
+                        last_missing = ["관련 지식베이스 문서를 찾지 못함"]
                 await self._emit_progress(
                     callback, iteration, "generating", last_confidence, last_missing
                 )

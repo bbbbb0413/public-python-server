@@ -471,7 +471,7 @@ async def test_agentic_ask_streams_tokens_immediately_as_they_arrive(
     rag_validator: RagContentValidator,
     secret_pii_scanner: SecretPiiScanner,
 ):
-    tokens = ["안녕", "하세요", ", ", "반갑", "습니다."]
+    tokens = ["안녕\n", "하세요\n", ", \n", "반갑\n", "습니다.\n"]
     mock_llm_gateway = MagicMock(spec=LlmGatewayService)
 
     async def fake_stream(_command) -> AsyncIterator[str]:
@@ -1113,5 +1113,229 @@ async def test_agentic_ask_uses_provided_conversation_history_without_session_lo
         ("assistant", "SSO와 감사 로그를 지원합니다."),
         ("user", original_question),
     ]
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_filters_cot_inference_lines_and_masks_pii(
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    # 수용 기준 1 검증:
+    # LLM Gateway가 Step 1: 분석\n\n문서 내용에 따르면 정답입니다.\nThe final answer is 정답 방출 시
+    # CoT 라인은 방출되지 않고 정제된 본문만 방출되며 PII 마스킹 유지
+    raw_tokens = [
+        "Step 1: 분석\n",
+        "\n",
+        "문서 내용에 따르면 담당자 연락처는 010-1234-5678 입니다.\n",
+        "The final answer is 정답",
+    ]
+    mock_llm_gateway = MagicMock(spec=LlmGatewayService)
+
+    async def fake_stream(_command) -> AsyncIterator[str]:
+        for t in raw_tokens:
+            yield t
+
+    mock_llm_gateway.stream.side_effect = fake_stream
+
+    mock_critique_generator.generate.return_value = Critique.of(
+        answered=True, missing=[], next_query="", confidence=0.9
+    )
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+    )
+
+    command = AgenticAskCommand(
+        question="복합 질문",
+        budget=IterationBudget.of(max_iterations=1, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+    )
+
+    streamed_chunks = [c async for c in use_case.execute(command)]
+    full_text = "".join(streamed_chunks)
+
+    assert "Step 1: 분석" not in full_text
+    assert "The final answer is 정답" not in full_text
+    assert "문서 내용에 따르면 담당자 연락처는" in full_text
+    assert "010-1234-5678" not in full_text
+    assert "[REDACTED_KR_PHONE]" in full_text
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_fallback_confidence_when_budget_exhausted_with_chunks(
+    mock_llm_gateway: MagicMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    # 수용 기준 2 검증:
+    # 1회차 실행 중 청크 2건(0.85, 0.72)이 검색되었으나 예산 소진으로 조기 종료될 때
+    # confidence=0.85 (청크 최고점), missing=["답변 검증 예산 소진으로 상세 비평 생략"]
+    chunks = [
+        SimilaritySearchResult(
+            text="청크 내용 1",
+            score=0.72,
+            metadata=VectorDocumentMetadata(document_id="doc-1", file_name="f1.pdf", chunk_index=0),
+        ),
+        SimilaritySearchResult(
+            text="청크 내용 2",
+            score=0.85,
+            metadata=VectorDocumentMetadata(document_id="doc-2", file_name="f2.pdf", chunk_index=1),
+        ),
+    ]
+    mock_hybrid_search = AsyncMock(spec=HybridSearchUseCase)
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=chunks, query_embedding=[0.1, 0.2]
+    )
+
+    events: list[dict] = []
+
+    async def on_progress(data: dict) -> None:
+        events.append(data)
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        on_progress=on_progress,
+    )
+
+    # 1회차 답변 생성 도중(또는 직후) 예산 소진 유도 (token_budget=1)
+    command = AgenticAskCommand(
+        question="1회차 예산 소진 질문",
+        budget=IterationBudget.of(max_iterations=1, token_budget=1, timeout_ms=5000),
+        confidence_threshold=0.8,
+    )
+
+    _ = [c async for c in use_case.execute(command)]
+
+    # 비평(critique)은 예산 소진으로 호출되지 않아야 함
+    mock_critique_generator.generate.assert_not_awaited()
+
+    # 마지막 progress 이벤트 확인
+    assert len(events) >= 2
+    final_event = events[-1]
+    assert final_event["iteration"] == 1
+    assert final_event["phase"] == "generating"
+    assert final_event["confidence"] == 0.85
+    assert final_event["missing"] == ["답변 검증 예산 소진으로 상세 비평 생략"]
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_fallback_confidence_when_budget_exhausted_with_no_chunks(
+    mock_llm_gateway: MagicMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    # 수용 기준 3 검증:
+    # 1회차에 검색된 청크가 0건(chunks=[])이고 예산 소진 시
+    # confidence=0.0, missing=["관련 지식베이스 문서를 찾지 못함"]
+    mock_hybrid_search = AsyncMock(spec=HybridSearchUseCase)
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=[], query_embedding=[0.1, 0.2]
+    )
+
+    events: list[dict] = []
+
+    async def on_progress(data: dict) -> None:
+        events.append(data)
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        on_progress=on_progress,
+    )
+
+    command = AgenticAskCommand(
+        question="문서 없는 예산 소진 질문",
+        budget=IterationBudget.of(max_iterations=1, token_budget=1, timeout_ms=5000),
+        confidence_threshold=0.8,
+    )
+
+    _ = [c async for c in use_case.execute(command)]
+
+    assert len(events) >= 2
+    final_event = events[-1]
+    assert final_event["iteration"] == 1
+    assert final_event["phase"] == "generating"
+    assert final_event["confidence"] == 0.0
+    assert final_event["missing"] == ["관련 지식베이스 문서를 찾지 못함"]
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_preserves_previous_confidence_when_exhausted_in_subsequent_iteration(
+    mock_hybrid_search: AsyncMock,
+    mock_llm_gateway: MagicMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    # 수용 기준 4 검증:
+    # 1회차 비평에서 신뢰도 0.65가 산출된 후 2회차 생성 중 예산 소진 시
+    # 이전 회차에서 검증된 신뢰도 0.65와 missing 정보 유지
+    mock_critique_generator.generate.return_value = Critique.of(
+        answered=False,
+        missing=["추가 보충 필요 항목"],
+        next_query="보충 검색",
+        confidence=0.65,
+    )
+
+    events: list[dict] = []
+
+    async def on_progress(data: dict) -> None:
+        events.append(data)
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        on_progress=on_progress,
+    )
+
+    # max_iterations=2로 2회차 generating 직후 소진 유도
+    command = AgenticAskCommand(
+        question="2회차 예산 소진 질문",
+        budget=IterationBudget.of(max_iterations=2, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+    )
+
+    _ = [c async for c in use_case.execute(command)]
+
+    final_event = events[-1]
+    assert final_event["iteration"] == 2
+    assert final_event["phase"] == "generating"
+    assert final_event["confidence"] == 0.65
+    assert final_event["missing"] == ["추가 보충 필요 항목"]
+
 
 
