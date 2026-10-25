@@ -1,6 +1,7 @@
 import re
 from typing import Any
 
+from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from ai_service.rag.schemas import (
@@ -153,7 +154,67 @@ class ConversationSessionRepository:
 # Backward compatibility alias
 ConversationSessionRepositoryImpl = ConversationSessionRepository
 
+BOOKMARK_COLLECTION_NAME = "rag_bookmarks"
+
+
+class BookmarkRepository:
+    def __init__(self, db: AsyncIOMotorDatabase[dict[str, Any]]) -> None:
+        self._collection = db[BOOKMARK_COLLECTION_NAME]
+
+    async def ensure_indexes(self) -> None:
+        await self._collection.create_index(
+            [("userId", 1), ("createdAt", -1)], name="user_id_created_at_idx"
+        )
+
+    async def create(self, bookmark_dict: dict[str, Any]) -> str:
+        doc = dict(bookmark_dict)
+        result = await self._collection.insert_one(doc)
+        return str(result.inserted_id)
+
+    async def find_by_user_id(
+        self, user_id: str, page: int, limit: int, query: str | None = None
+    ) -> list[dict[str, Any]]:
+        filter_dict: dict[str, Any] = {"userId": user_id}
+        if query and query.strip():
+            regex = re.escape(query.strip())
+            filter_dict["$or"] = [
+                {"title": {"$regex": regex, "$options": "i"}},
+                {"content": {"$regex": regex, "$options": "i"}},
+                {"note": {"$regex": regex, "$options": "i"}},
+            ]
+        skip = (page - 1) * limit
+        cursor = (
+            self._collection.find(filter_dict)
+            .sort("createdAt", -1)
+            .skip(skip)
+            .limit(limit)
+        )
+        items: list[dict[str, Any]] = []
+        async for record in cursor:
+            record_copy = dict(record)
+            if "_id" in record_copy:
+                record_copy["id"] = str(record_copy.pop("_id"))
+            items.append(record_copy)
+        return items
+
+    async def delete_by_id_for_user(self, bookmark_id: str, user_id: str) -> bool:
+        id_conditions: list[Any] = [bookmark_id]
+        if ObjectId.is_valid(bookmark_id):
+            id_conditions.append(ObjectId(bookmark_id))
+        result = await self._collection.delete_one(
+            {"_id": {"$in": id_conditions}, "userId": user_id}
+        )
+        if result.deleted_count > 0:
+            return True
+        result2 = await self._collection.delete_one(
+            {"id": bookmark_id, "userId": user_id}
+        )
+        return result2.deleted_count > 0
+
+
 __all__ = [
+    "BOOKMARK_COLLECTION_NAME",
+    "BookmarkRepository",
     "COLLECTION_NAME",
     "ConversationSessionRepository",
     "ConversationSessionRepositoryImpl",

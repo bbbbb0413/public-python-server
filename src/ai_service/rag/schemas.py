@@ -442,9 +442,69 @@ class SessionDetailOut(BaseModel):
 
 TurnOut = SessionTurnOut
 
+
+@dataclass(frozen=True)
+class BookmarkItem:
+    id: str
+    user_id: str
+    session_id: str
+    turn_index: int | None
+    title: str | None
+    content: str | None
+    note: str | None
+    created_at: datetime
+
+
+class CreateBookmarkIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str = Field(alias="sessionId")
+    turn_index: int | None = Field(default=None, alias="turnIndex")
+    note: str | None = None
+
+
+class BookmarkItemOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    session_id: str = Field(alias="sessionId")
+    turn_index: int | None = Field(default=None, alias="turnIndex")
+    title: str | None = None
+    content: str | None = None
+    note: str | None = None
+    created_at: datetime = Field(alias="createdAt")
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "BookmarkItemOut":
+        return cls(
+            id=str(data.get("id") or data.get("_id") or ""),
+            sessionId=data.get("sessionId") or data.get("session_id") or "",
+            turnIndex=data.get("turnIndex") if "turnIndex" in data else data.get("turn_index"),
+            title=data.get("title"),
+            content=data.get("content"),
+            note=data.get("note"),
+            createdAt=data.get("createdAt") or data.get("created_at") or datetime.now(UTC),
+        )
+
+    @classmethod
+    def from_domain(cls, item: BookmarkItem) -> "BookmarkItemOut":
+        return cls(
+            id=item.id,
+            sessionId=item.session_id,
+            turnIndex=item.turn_index,
+            title=item.title,
+            content=item.content,
+            note=item.note,
+            createdAt=item.created_at,
+        )
+
+
 __all__ = [
+    "BookmarkItem",
+    "BookmarkItemOut",
     "ConversationSession",
     "ConversationTurn",
+    "CreateBookmarkIn",
     "Critique",
     "CritiqueProps",
     "GuardrailVerdict",

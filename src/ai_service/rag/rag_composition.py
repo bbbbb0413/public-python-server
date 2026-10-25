@@ -44,7 +44,10 @@ from ai_service.rag.infrastructure.cache.redis_semantic_cache_adapter import (
 )
 from ai_service.rag.infrastructure.search.http_reranker_adapter import HttpRerankerAdapter
 from ai_service.rag.infrastructure.search.qdrant_text_search_adapter import QdrantTextSearchAdapter
-from ai_service.rag.repository import ConversationSessionRepository
+from ai_service.rag.repository import (
+    BookmarkRepository,
+    ConversationSessionRepository,
+)
 from ai_service.rag.schemas import IterationBudget
 
 LLM_CACHE_DB = 2
@@ -133,6 +136,8 @@ async def build_rag_composition(
 
     session_repo = ConversationSessionRepository(mongo_db)
     await session_repo.ensure_indexes()
+    bookmark_repo = BookmarkRepository(mongo_db)
+    await bookmark_repo.ensure_indexes()
 
     rag_validator = RagContentValidator()
     secret_pii_scanner = SecretPiiScanner()
