@@ -22,6 +22,9 @@ def _clear_overrides():
     session_repo_mock = MagicMock(spec=ConversationSessionRepository)
     session_repo_mock.find_by_id_for_user = AsyncMock(return_value=None)
     app.dependency_overrides[get_conversation_session_repository] = lambda: session_repo_mock
+
+    bookmark_repo_mock = MagicMock(spec=BookmarkRepository)
+    app.dependency_overrides[get_bookmark_repository] = lambda: bookmark_repo_mock
     yield
     app.dependency_overrides.clear()
 
@@ -174,3 +177,61 @@ async def test_delete_bookmark_idor_defense_returns_404() -> None:
     body = response.json()
     assert "detail" in body
     bookmark_repo_mock.delete_by_id_for_user.assert_awaited_once_with("bm-user2-99", "user-1")
+
+
+async def test_get_bookmarks_with_keyword_query_parameter() -> None:
+    bookmark_repo_mock = MagicMock(spec=BookmarkRepository)
+    bookmark_repo_mock.find_by_user_id = AsyncMock(return_value=[])
+    app.dependency_overrides[get_bookmark_repository] = lambda: bookmark_repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/rag/bookmarks?userId=user-1&keyword=검색어&page=2&limit=5")
+
+    assert response.status_code == 200
+    assert response.json() == []
+    bookmark_repo_mock.find_by_user_id.assert_awaited_once_with("user-1", 2, 5, "검색어")
+
+
+async def test_create_bookmark_turn_index_out_of_bounds_graceful() -> None:
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id_for_user = AsyncMock(return_value=_create_sample_session())
+    app.dependency_overrides[get_conversation_session_repository] = lambda: session_repo_mock
+
+    bookmark_repo_mock = MagicMock(spec=BookmarkRepository)
+    bookmark_repo_mock.create = AsyncMock(return_value="bm-test-oob")
+    app.dependency_overrides[get_bookmark_repository] = lambda: bookmark_repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/rag/bookmarks?userId=user-1",
+            json={"sessionId": "sess-1", "turnIndex": 999},
+        )
+
+    assert response.status_code in (200, 201)
+    body = response.json()
+    assert body["id"] == "bm-test-oob"
+    assert body["turnIndex"] == 999
+    assert body["content"] is None
+    assert body["title"] == "파이프라인 질의"
+
+
+async def test_create_bookmark_missing_session_id_fails_validation() -> None:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/rag/bookmarks?userId=user-1",
+            json={"turnIndex": 0},
+        )
+
+    assert response.status_code == 422
+
+
+async def test_delete_bookmark_missing_user_id_fails_validation() -> None:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.delete("/rag/bookmarks/bm-test-1")
+
+    assert response.status_code == 422
+

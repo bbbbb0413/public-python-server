@@ -136,3 +136,28 @@ async def test_delete_bookmark_success_and_failure() -> None:
     # Failure (not found or not owner)
     with pytest.raises(BookmarkNotFoundError):
         await service.delete_bookmark("bm-2", "user-1")
+
+
+@pytest.mark.asyncio
+async def test_create_bookmark_with_negative_or_out_of_range_turn_index() -> None:
+    session_repo = MagicMock(spec=ConversationSessionRepository)
+    session_repo.find_by_id_for_user = AsyncMock(return_value=_create_sample_session())
+
+    bookmark_repo = MagicMock(spec=BookmarkRepository)
+    bookmark_repo.create = AsyncMock(return_value="bm-oob-1")
+
+    service = BookmarkService(bookmark_repo=bookmark_repo, session_repo=session_repo)
+
+    # Negative index
+    dto_neg = CreateBookmarkIn(sessionId="sess-1", turnIndex=-1)
+    res_neg = await service.create_bookmark(user_id="user-1", dto=dto_neg)
+    assert res_neg.turn_index == -1
+    assert res_neg.content is None
+    assert res_neg.title == "세션 제목: 파이프라인 가이드"
+
+    # Out of range positive index
+    dto_pos = CreateBookmarkIn(sessionId="sess-1", turnIndex=100)
+    res_pos = await service.create_bookmark(user_id="user-1", dto=dto_pos)
+    assert res_pos.turn_index == 100
+    assert res_pos.content is None
+
