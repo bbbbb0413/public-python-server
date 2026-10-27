@@ -156,6 +156,34 @@ async def test_list_versions_with_user_id_returns_own_prompts_only() -> None:
     assert templates_a[0].user_id == "user-A"
 
 
+async def test_list_versions_with_multiple_global_and_one_user_prompt() -> None:
+    repo = FakePromptTemplateRepository()
+    service = PromptService(repo)
+    # 2 global prompts
+    await service.create_prompt(CreatePromptIn(name="rag-qa-system", content="global-v1"))
+    await service.create_prompt(CreatePromptIn(name="rag-qa-system", content="global-v2"))
+    # 1 user-A prompt
+    await service.create_prompt(
+        CreatePromptIn(name="rag-qa-system", content="user-A-v1", userId="user-A")
+    )
+
+    templates_a = await service.list_versions("rag-qa-system", user_id="user-A")
+    assert len(templates_a) == 1
+    assert templates_a[0].version == 1
+    assert templates_a[0].user_id == "user-A"
+    assert templates_a[0].content == "user-A-v1"
+
+
+async def test_list_versions_returns_empty_when_user_has_no_prompts_even_if_global_exist() -> None:
+    repo = FakePromptTemplateRepository()
+    service = PromptService(repo)
+    await service.create_prompt(CreatePromptIn(name="rag-qa-system", content="global-v1"))
+    await service.create_prompt(CreatePromptIn(name="rag-qa-system", content="global-v2"))
+
+    templates_a = await service.list_versions("rag-qa-system", user_id="user-A")
+    assert templates_a == []
+
+
 async def test_list_versions_without_user_id_returns_global_prompts_only() -> None:
     repo = FakePromptTemplateRepository()
     service = PromptService(repo)

@@ -121,6 +121,105 @@ async def test_list_prompts_isolation_by_user_id(shared_repo) -> None:  # type: 
         assert res_none.json() == []
 
 
+async def test_list_prompts_isolation_with_two_globals_and_one_user_prompt(shared_repo) -> None:  # type: ignore[no-untyped-def]
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create 2 global prompts
+        await client.post(
+            "/prompts",
+            json={"name": "rag-qa-system", "content": "global-v1", "variables": ["context"]},
+        )
+        await client.post(
+            "/prompts",
+            json={"name": "rag-qa-system", "content": "global-v2", "variables": ["context"]},
+        )
+        # Create 1 user-A prompt
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "user-a-v1",
+                "variables": ["context"],
+                "userId": "user-A",
+            },
+        )
+
+        res_a = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
+        assert res_a.status_code == 200
+        items_a = res_a.json()
+        assert len(items_a) == 1
+        assert items_a[0]["version"] == 1
+        assert items_a[0]["userId"] == "user-A"
+        assert items_a[0]["content"] == "user-a-v1"
+
+
+async def test_list_prompts_returns_empty_when_user_has_zero_prompts_with_globals_present(
+    shared_repo,  # type: ignore[no-untyped-def]
+) -> None:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create 2 global prompts
+        await client.post(
+            "/prompts",
+            json={"name": "rag-qa-system", "content": "global-v1", "variables": ["context"]},
+        )
+        await client.post(
+            "/prompts",
+            json={"name": "rag-qa-system", "content": "global-v2", "variables": ["context"]},
+        )
+
+        # User A has 0 prompts
+        res_a = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
+        assert res_a.status_code == 200
+        assert res_a.json() == []
+
+
+async def test_user_delete_slot_succeeds_without_404_when_global_prompts_coexist(
+    shared_repo,  # type: ignore[no-untyped-def]
+) -> None:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create global v1
+        await client.post(
+            "/prompts",
+            json={"name": "rag-qa-system", "content": "global-v1", "variables": ["context"]},
+        )
+        # Create user-A v1
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "user-a-v1",
+                "variables": ["context"],
+                "userId": "user-A",
+            },
+        )
+
+        # User A views their slot list: only their prompt should appear
+        list_res = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
+        assert list_res.status_code == 200
+        slots = list_res.json()
+        assert len(slots) == 1
+        assert slots[0]["version"] == 1
+        assert slots[0]["userId"] == "user-A"
+
+        # User A deletes their personal slot: should succeed with 204 (no 404 error)
+        del_res = await client.delete("/prompts/rag-qa-system/1", params={"userId": "user-A"})
+        assert del_res.status_code == 204
+
+        # After deletion, User A's list is empty
+        list_after = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
+        assert list_after.status_code == 200
+        assert list_after.json() == []
+
+        # Global prompt is preserved
+        global_res = await client.get("/prompts/rag-qa-system")
+        assert global_res.status_code == 200
+        assert len(global_res.json()) == 1
+        assert global_res.json()[0]["content"] == "global-v1"
+
+
+
 async def test_list_prompts_when_only_user_prompts_exist(shared_repo) -> None:  # type: ignore[no-untyped-def]
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
