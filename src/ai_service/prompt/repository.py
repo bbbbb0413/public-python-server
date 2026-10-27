@@ -64,10 +64,7 @@ class PromptTemplateRepository:
     ) -> list[PromptTemplate]:
         query: dict[str, Any]
         if user_id is not None:
-            query = {
-                "name": name,
-                "$or": [{"userId": user_id}, {"userId": {"$exists": False}}],
-            }
+            query = {"name": name, "userId": user_id}
         else:
             query = {"name": name, "userId": {"$exists": False}}
         cursor = self._collection.find(query).sort("version", -1)

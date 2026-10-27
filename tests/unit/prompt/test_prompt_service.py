@@ -64,7 +64,7 @@ async def test_user_scoped_activate_does_not_touch_global_active_version() -> No
 
     global_active = await service.activate_prompt(name="rag-qa-system", version=1)
     user_active = await service.activate_prompt(
-        name="rag-qa-system", version=2, user_id="user-1"
+        name="rag-qa-system", version=1, user_id="user-1"
     )
 
     reloaded_global = await repo.find_by_name_and_version("rag-qa-system", 1)
@@ -139,20 +139,49 @@ async def test_other_users_active_prompt_never_leaks_as_fallback() -> None:
     assert template.content == RAG_QA_DEFAULT_PROMPT
 
 
-async def test_list_versions_with_user_id_returns_global_and_own_prompts_only() -> None:
+async def test_list_versions_with_user_id_returns_own_prompts_only() -> None:
     repo = FakePromptTemplateRepository()
     service = PromptService(repo)
     await service.create_prompt(CreatePromptIn(name="rag-qa-system", content="global-v1"))
     await service.create_prompt(
-        CreatePromptIn(name="rag-qa-system", content="user-A-v2", userId="user-A")
+        CreatePromptIn(name="rag-qa-system", content="user-A-v1", userId="user-A")
     )
     await service.create_prompt(
-        CreatePromptIn(name="rag-qa-system", content="user-B-v3", userId="user-B")
+        CreatePromptIn(name="rag-qa-system", content="user-B-v1", userId="user-B")
     )
 
     templates_a = await service.list_versions("rag-qa-system", user_id="user-A")
-    assert [t.version for t in templates_a] == [2, 1]
-    assert all(t.user_id in (None, "user-A") for t in templates_a)
+    assert [t.version for t in templates_a] == [1]
+    assert len(templates_a) == 1
+    assert templates_a[0].user_id == "user-A"
+
+
+async def test_list_versions_with_multiple_global_and_one_user_prompt() -> None:
+    repo = FakePromptTemplateRepository()
+    service = PromptService(repo)
+    # 2 global prompts
+    await service.create_prompt(CreatePromptIn(name="rag-qa-system", content="global-v1"))
+    await service.create_prompt(CreatePromptIn(name="rag-qa-system", content="global-v2"))
+    # 1 user-A prompt
+    await service.create_prompt(
+        CreatePromptIn(name="rag-qa-system", content="user-A-v1", userId="user-A")
+    )
+
+    templates_a = await service.list_versions("rag-qa-system", user_id="user-A")
+    assert len(templates_a) == 1
+    assert templates_a[0].version == 1
+    assert templates_a[0].user_id == "user-A"
+    assert templates_a[0].content == "user-A-v1"
+
+
+async def test_list_versions_returns_empty_when_user_has_no_prompts_even_if_global_exist() -> None:
+    repo = FakePromptTemplateRepository()
+    service = PromptService(repo)
+    await service.create_prompt(CreatePromptIn(name="rag-qa-system", content="global-v1"))
+    await service.create_prompt(CreatePromptIn(name="rag-qa-system", content="global-v2"))
+
+    templates_a = await service.list_versions("rag-qa-system", user_id="user-A")
+    assert templates_a == []
 
 
 async def test_list_versions_without_user_id_returns_global_prompts_only() -> None:
@@ -244,12 +273,16 @@ async def test_delete_prompt_falls_back_to_global_active_when_present() -> None:
     )
     await service.activate_prompt("rag-qa-system", version=1)
 
-    await service.create_prompt(
-        CreatePromptIn(name="rag-qa-system", content="user-a-v2", userId="user-A")
+    user_template = await service.create_prompt(
+        CreatePromptIn(name="rag-qa-system", content="user-a-v1", userId="user-A")
     )
-    await service.activate_prompt("rag-qa-system", version=2, user_id="user-A")
+    await service.activate_prompt(
+        "rag-qa-system", version=user_template.version, user_id="user-A"
+    )
 
-    await service.delete_prompt("rag-qa-system", version=2, user_id="user-A")
+    await service.delete_prompt(
+        "rag-qa-system", version=user_template.version, user_id="user-A"
+    )
 
     active = await service.get_active_prompt("rag-qa-system", user_id="user-A")
     assert active.version == 1
@@ -344,3 +377,57 @@ async def test_repository_delete_by_name_and_version_queries_with_user_isolation
     collection.delete_one.assert_awaited_once_with(
         {"name": "rag-qa-system", "version": 2, "userId": {"$exists": False}}
     )
+
+
+async def test_deactivate_active_prompt_for_user() -> None:
+    repo = FakePromptTemplateRepository()
+    service = PromptService(repo)
+    await service.create_prompt(
+        CreatePromptIn(name="rag-qa-system", content="user-A-v1", userId="user-A")
+    )
+    await service.activate_prompt("rag-qa-system", version=1, user_id="user-A")
+    active = await service.get_active_prompt("rag-qa-system", user_id="user-A")
+    assert active.version == 1
+
+    await service.deactivate_active_prompt("rag-qa-system", user_id="user-A")
+    active_after = await service.get_active_prompt("rag-qa-system", user_id="user-A")
+    assert active_after.version == 0
+
+
+async def test_deactivate_active_prompt_global_when_user_id_is_none() -> None:
+    repo = FakePromptTemplateRepository()
+    service = PromptService(repo)
+    await service.create_prompt(
+        CreatePromptIn(name="rag-qa-system", content="global-v1")
+    )
+    await service.activate_prompt("rag-qa-system", version=1)
+    active = await service.get_active_prompt("rag-qa-system")
+    assert active.version == 1
+
+    await service.deactivate_active_prompt("rag-qa-system", user_id=None)
+    active_after = await service.get_active_prompt("rag-qa-system")
+    assert active_after.version == 0
+
+
+async def test_repository_find_all_by_name_queries_with_user_isolation() -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from ai_service.prompt.repository import PromptTemplateRepository
+
+    repo = PromptTemplateRepository.__new__(PromptTemplateRepository)
+    collection = MagicMock()
+    cursor = MagicMock()
+    cursor.sort.return_value = cursor
+    cursor.to_list = AsyncMock(return_value=[])
+    collection.find.return_value = cursor
+    repo._collection = collection
+
+    await repo.find_all_by_name("rag-qa-system", user_id="user-A")
+    collection.find.assert_called_once_with({"name": "rag-qa-system", "userId": "user-A"})
+
+    collection.find.reset_mock()
+    await repo.find_all_by_name("rag-qa-system")
+    collection.find.assert_called_once_with(
+        {"name": "rag-qa-system", "userId": {"$exists": False}}
+    )
+

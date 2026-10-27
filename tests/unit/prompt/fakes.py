@@ -31,7 +31,7 @@ class FakePromptTemplateRepository:
                 for (n, _, _), t in self.storage.items()
                 if n == name
                 and (
-                    (t.user_id in (user_id, None))
+                    (t.user_id == user_id)
                     if user_id is not None
                     else (t.user_id is None)
                 )

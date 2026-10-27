@@ -96,8 +96,13 @@ class PromptService:
         if not deleted:
             raise PromptTemplateNotFoundError(name, version)
 
-    async def deactivate_active_prompt(self, name: str, user_id: str) -> None:
-        await self._repo.deactivate_active_for_user(name, user_id)
+    async def deactivate_active_prompt(
+        self, name: str, user_id: str | None = None
+    ) -> None:
+        if user_id is not None:
+            await self._repo.deactivate_active_for_user(name, user_id)
+        else:
+            await self._repo.deactivate_all_by_name(name)
 
 
 __all__ = ["PromptService", "RAG_QA_DEFAULT_PROMPT"]

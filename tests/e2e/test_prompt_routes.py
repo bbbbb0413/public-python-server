@@ -78,34 +78,34 @@ async def test_list_prompts_isolation_by_user_id(shared_repo) -> None:  # type: 
             "/prompts",
             json={"name": "rag-qa-system", "content": "global-v1", "variables": ["context"]},
         )
-        # Create user-A v2
+        # Create user-A v1
         await client.post(
             "/prompts",
             json={
                 "name": "rag-qa-system",
-                "content": "user-a-v2",
+                "content": "user-a-v1",
                 "variables": ["context"],
                 "userId": "user-A",
             },
         )
-        # Create user-B v3
+        # Create user-B v1
         await client.post(
             "/prompts",
             json={
                 "name": "rag-qa-system",
-                "content": "user-b-v3",
+                "content": "user-b-v1",
                 "variables": ["context"],
                 "userId": "user-B",
             },
         )
 
-        # 1. user-A requests: should get global v1 and user-A v2 (total 2), but NOT user-B v3
+        # 1. user-A requests: should get only user-A v1 (total 1), not global v1 and not user-B v1
         res_a = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
         assert res_a.status_code == 200
         items_a = res_a.json()
-        assert len(items_a) == 2
-        assert [item["version"] for item in items_a] == [2, 1]
-        assert all(item.get("userId") in (None, "user-A") for item in items_a)
+        assert len(items_a) == 1
+        assert [item["version"] for item in items_a] == [1]
+        assert items_a[0]["userId"] == "user-A"
 
         # 2. No userId requests (admin global): should get only global v1
         res_global = await client.get("/prompts/rag-qa-system")
@@ -119,6 +119,105 @@ async def test_list_prompts_isolation_by_user_id(shared_repo) -> None:  # type: 
         res_none = await client.get("/prompts/non-existent", params={"userId": "user-A"})
         assert res_none.status_code == 200
         assert res_none.json() == []
+
+
+async def test_list_prompts_isolation_with_two_globals_and_one_user_prompt(shared_repo) -> None:  # type: ignore[no-untyped-def]
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create 2 global prompts
+        await client.post(
+            "/prompts",
+            json={"name": "rag-qa-system", "content": "global-v1", "variables": ["context"]},
+        )
+        await client.post(
+            "/prompts",
+            json={"name": "rag-qa-system", "content": "global-v2", "variables": ["context"]},
+        )
+        # Create 1 user-A prompt
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "user-a-v1",
+                "variables": ["context"],
+                "userId": "user-A",
+            },
+        )
+
+        res_a = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
+        assert res_a.status_code == 200
+        items_a = res_a.json()
+        assert len(items_a) == 1
+        assert items_a[0]["version"] == 1
+        assert items_a[0]["userId"] == "user-A"
+        assert items_a[0]["content"] == "user-a-v1"
+
+
+async def test_list_prompts_returns_empty_when_user_has_zero_prompts_with_globals_present(
+    shared_repo,  # type: ignore[no-untyped-def]
+) -> None:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create 2 global prompts
+        await client.post(
+            "/prompts",
+            json={"name": "rag-qa-system", "content": "global-v1", "variables": ["context"]},
+        )
+        await client.post(
+            "/prompts",
+            json={"name": "rag-qa-system", "content": "global-v2", "variables": ["context"]},
+        )
+
+        # User A has 0 prompts
+        res_a = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
+        assert res_a.status_code == 200
+        assert res_a.json() == []
+
+
+async def test_user_delete_slot_succeeds_without_404_when_global_prompts_coexist(
+    shared_repo,  # type: ignore[no-untyped-def]
+) -> None:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create global v1
+        await client.post(
+            "/prompts",
+            json={"name": "rag-qa-system", "content": "global-v1", "variables": ["context"]},
+        )
+        # Create user-A v1
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "user-a-v1",
+                "variables": ["context"],
+                "userId": "user-A",
+            },
+        )
+
+        # User A views their slot list: only their prompt should appear
+        list_res = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
+        assert list_res.status_code == 200
+        slots = list_res.json()
+        assert len(slots) == 1
+        assert slots[0]["version"] == 1
+        assert slots[0]["userId"] == "user-A"
+
+        # User A deletes their personal slot: should succeed with 204 (no 404 error)
+        del_res = await client.delete("/prompts/rag-qa-system/1", params={"userId": "user-A"})
+        assert del_res.status_code == 204
+
+        # After deletion, User A's list is empty
+        list_after = await client.get("/prompts/rag-qa-system", params={"userId": "user-A"})
+        assert list_after.status_code == 200
+        assert list_after.json() == []
+
+        # Global prompt is preserved
+        global_res = await client.get("/prompts/rag-qa-system")
+        assert global_res.status_code == 200
+        assert len(global_res.json()) == 1
+        assert global_res.json()[0]["content"] == "global-v1"
+
 
 
 async def test_list_prompts_when_only_user_prompts_exist(shared_repo) -> None:  # type: ignore[no-untyped-def]
@@ -239,21 +338,22 @@ async def test_delete_prompt_version_falls_back_to_global_active_prompt(shared_r
         )
         await client.patch("/prompts/rag-qa-system/1/activate")
 
-        await client.post(
+        user_res = await client.post(
             "/prompts",
             json={
                 "name": "rag-qa-system",
-                "content": "user-a-v2",
+                "content": "user-a-v1",
                 "variables": ["context"],
                 "userId": "user-A",
             },
         )
+        user_ver = user_res.json()["version"]
         await client.patch(
-            "/prompts/rag-qa-system/2/activate", params={"userId": "user-A"}
+            f"/prompts/rag-qa-system/{user_ver}/activate", params={"userId": "user-A"}
         )
 
         del_res = await client.delete(
-            "/prompts/rag-qa-system/2", params={"userId": "user-A"}
+            f"/prompts/rag-qa-system/{user_ver}", params={"userId": "user-A"}
         )
         assert del_res.status_code == 204
 
@@ -323,3 +423,29 @@ async def test_delete_active_route_does_not_conflict_with_delete_version(shared_
         )
         assert len(list_res.json()) == 1
         assert list_res.json()[0]["isActive"] is False
+
+
+async def test_delete_active_route_without_user_id_deactivates_global_active(shared_repo) -> None:  # type: ignore[no-untyped-def]
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post(
+            "/prompts",
+            json={
+                "name": "rag-qa-system",
+                "content": "global-v1",
+                "variables": ["context"],
+            },
+        )
+        await client.patch("/prompts/rag-qa-system/1/activate")
+
+        active_res = await client.get("/prompts/rag-qa-system/active")
+        assert active_res.status_code == 200
+        assert active_res.json()["version"] == 1
+
+        reset_res = await client.delete("/prompts/rag-qa-system/active")
+        assert reset_res.status_code == 204
+
+        active_after = await client.get("/prompts/rag-qa-system/active")
+        assert active_after.status_code == 200
+        assert active_after.json()["version"] == 0
+
