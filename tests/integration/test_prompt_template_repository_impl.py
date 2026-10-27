@@ -68,10 +68,10 @@ async def test_find_all_by_name_user_isolation(mongo_test_db) -> None:  # type: 
         PromptTemplate.create(name="p", content="user-b-v3", version=3, user_id="user-B")
     )
 
-    # 1. user-A should get own (v2) and global (v1), sorted by version desc
+    # 1. user-A should get own (v2) only, NOT global (v1)
     user_a_results = await repo.find_all_by_name("p", user_id="user-A")
-    assert [t.version for t in user_a_results] == [2, 1]
-    assert all(t.user_id in (None, "user-A") for t in user_a_results)
+    assert [t.version for t in user_a_results] == [2]
+    assert all(t.user_id == "user-A" for t in user_a_results)
 
     # 2. None user_id should get global (v1) only
     global_results = await repo.find_all_by_name("p")

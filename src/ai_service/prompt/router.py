@@ -54,7 +54,7 @@ async def activate(
 async def reset_active_for_user(
     name: str,
     service: PromptServiceDep,
-    user_id: str = Query(..., alias="userId"),
+    user_id: str | None = Query(default=None, alias="userId"),
 ) -> None:
     await service.deactivate_active_prompt(name, user_id)
 
