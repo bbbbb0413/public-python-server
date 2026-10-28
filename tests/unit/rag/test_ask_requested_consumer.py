@@ -502,11 +502,12 @@ async def test_ask_requested_consumer_cancelled_stops_token_streaming():
     assert len(token_calls) == 1
     assert token_calls[0].args[1]["data"] == "첫번째 토큰 "
 
-    # 세션 저장은 중단 시점까지 수집된 "첫번째 토큰 "으로 완료되어야 함
+    # 세션 저장은 중단 시점까지 수집된 "첫번째 토큰 "과 is_cancelled=True로 완료되어야 함
     session_repo_mock.update.assert_awaited_once()
     updated_session = session_repo_mock.update.await_args[0][0]
     assert len(updated_session.turns) == 2
     assert updated_session.turns[1].content == "첫번째 토큰 "
+    assert updated_session.turns[1].is_cancelled is True
 
     # done 이벤트가 정상 발행되어야 함
     done_calls = [
@@ -579,8 +580,12 @@ async def test_ask_requested_consumer_cancelled_before_first_chunk():
     ]
     assert len(token_calls) == 0
 
-    # 수집된 토큰이 없으므로 session_repo.update가 호출되지 않음
-    session_repo_mock.update.assert_not_called()
+    # 수집된 토큰이 없더라도 취소 안내 문구와 is_cancelled=True로 세션에 영속화되어야 함
+    session_repo_mock.update.assert_awaited_once()
+    updated_session = session_repo_mock.update.await_args[0][0]
+    assert len(updated_session.turns) == 2
+    assert updated_session.turns[1].content == "답변 생성이 중단되었습니다."
+    assert updated_session.turns[1].is_cancelled is True
 
     # done 이벤트는 발행되어야 함
     done_calls = [
@@ -893,6 +898,13 @@ async def test_ask_requested_consumer_agentic_cancelled_stops_streaming():
     ]
     assert len(token_calls) == 1
     assert token_calls[0].args[1]["data"] == "첫번째 토큰 "
+
+    # 세션에 is_cancelled=True로 영속화되어야 함
+    session_repo_mock.update.assert_awaited_once()
+    updated_session = session_repo_mock.update.await_args[0][0]
+    assert len(updated_session.turns) == 2
+    assert updated_session.turns[1].content == "첫번째 토큰 "
+    assert updated_session.turns[1].is_cancelled is True
 
 
 async def test_ask_requested_consumer_complex_persists_latest_multi_turn_sources():

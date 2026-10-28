@@ -35,6 +35,7 @@ class TurnValue:
     confidence: float | None = None
     missing: list[str] | None = None
     iterations: int | None = None
+    is_cancelled: bool = False
 
 
 class ConversationTurn:
@@ -53,6 +54,7 @@ class ConversationTurn:
         confidence: float | None = None,
         missing: list[str] | None = None,
         iterations: int | None = None,
+        is_cancelled: bool = False,
     ) -> "ConversationTurn":
         return cls(
             TurnValue(
@@ -63,6 +65,7 @@ class ConversationTurn:
                 confidence=confidence,
                 missing=missing,
                 iterations=iterations,
+                is_cancelled=is_cancelled,
             )
         )
 
@@ -98,6 +101,10 @@ class ConversationTurn:
     def iterations(self) -> int | None:
         return self._value.iterations
 
+    @property
+    def is_cancelled(self) -> bool:
+        return self._value.is_cancelled
+
 
 @dataclass(frozen=True)
 class TurnRecord:
@@ -108,6 +115,7 @@ class TurnRecord:
     confidence: float | None = None
     missing: list[str] | None = None
     iterations: int | None = None
+    is_cancelled: bool = False
 
 
 @dataclass(frozen=True)
@@ -158,6 +166,7 @@ class ConversationSession:
                     confidence=t.confidence,
                     missing=t.missing,
                     iterations=t.iterations,
+                    is_cancelled=t.is_cancelled,
                 )
             )
             for t in props.turns
@@ -180,6 +189,7 @@ class ConversationSession:
         confidence: float | None = None,
         missing: list[str] | None = None,
         iterations: int | None = None,
+        is_cancelled: bool = False,
     ) -> "ConversationSession":
         new_turns = [
             *self._turns,
@@ -190,6 +200,7 @@ class ConversationSession:
                 confidence=confidence,
                 missing=missing,
                 iterations=iterations,
+                is_cancelled=is_cancelled,
             ),
         ]
         return ConversationSession(
@@ -375,6 +386,7 @@ class SessionTurnOut(BaseModel):
     confidence: float | None = None
     missing: list[str] | None = None
     iterations: int | None = None
+    is_cancelled: bool = Field(default=False, alias="isCancelled")
 
     @classmethod
     def from_domain(cls, turn: ConversationTurn) -> "SessionTurnOut":
@@ -386,6 +398,7 @@ class SessionTurnOut(BaseModel):
             confidence=turn.confidence,
             missing=turn.missing,
             iterations=turn.iterations,
+            isCancelled=turn.is_cancelled,
         )
 
 

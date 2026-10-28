@@ -462,3 +462,48 @@ async def test_bookmark_routes_return_indistinguishable_404_for_other_or_missing
     repo_mock.update.assert_not_awaited()
 
 
+async def test_get_session_returns_is_cancelled_field() -> None:
+    now = datetime.now(UTC)
+    props = RestoreProps(
+        session_id="session-cancel-detail",
+        user_id="user-1",
+        title="중단된 세션 상세",
+        turns=[
+            TurnRecord(role="user", content="질문입니다", created_at=now),
+            TurnRecord(
+                role="assistant",
+                content="답변 생성이 중단되었습니다.",
+                created_at=now,
+                is_cancelled=True,
+            ),
+            TurnRecord(
+                role="assistant",
+                content="기존 레거시 완료 답변",
+                created_at=now,
+                is_cancelled=False,
+            ),
+        ],
+        created_at=now,
+        updated_at=now,
+    )
+    session = ConversationSession.restore(props)
+
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+    repo_mock.find_by_id_for_user = AsyncMock(return_value=session)
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/rag/sessions/session-cancel-detail?userId=user-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sessionId"] == "session-cancel-detail"
+    assert len(body["turns"]) == 3
+    assert body["turns"][0]["isCancelled"] is False
+    assert body["turns"][1]["isCancelled"] is True
+    assert body["turns"][1]["content"] == "답변 생성이 중단되었습니다."
+    assert body["turns"][2]["isCancelled"] is False
+
+
+

@@ -232,3 +232,114 @@ def test_conversation_session_bookmark_lifecycle_and_legacy_restore():
     out = SessionOut.from_domain(restored).model_dump(by_alias=True)
     assert out["isBookmarked"] is True
 
+
+def test_conversation_turn_cancellation():
+    turn = ConversationTurn.of_assistant("중단된 답변", is_cancelled=True)
+    assert turn.is_cancelled is True
+
+    user_turn = ConversationTurn.of_user("질문")
+    assert user_turn.is_cancelled is False
+
+    default_turn = ConversationTurn.of_assistant("정상 답변")
+    assert default_turn.is_cancelled is False
+
+
+def test_conversation_session_append_turn_with_cancellation():
+    session = ConversationSession.create("user-1", "질문 1")
+    updated = session.append_turn("질문 1", "중단된 답변", is_cancelled=True)
+    assert len(updated.turns) == 2
+    assert updated.turns[0].is_cancelled is False
+    assert updated.turns[1].is_cancelled is True
+
+
+def test_conversation_session_restore_and_repository_with_is_cancelled():
+    now = datetime.now(UTC)
+    props = RestoreProps(
+        session_id="s-cancel-1",
+        user_id="u-1",
+        title="중단 세션",
+        turns=[
+            TurnRecord(role="user", content="질문", created_at=now),
+            TurnRecord(
+                role="assistant",
+                content="중단된 답변",
+                created_at=now,
+                is_cancelled=True,
+            ),
+            TurnRecord(
+                role="assistant",
+                content="정상 완료 답변",
+                created_at=now,
+                is_cancelled=False,
+            ),
+        ],
+        created_at=now,
+        updated_at=now,
+    )
+    session = ConversationSession.restore(props)
+    assert session.turns[0].is_cancelled is False
+    assert session.turns[1].is_cancelled is True
+    assert session.turns[2].is_cancelled is False
+
+    record = ConversationSessionRepository._to_record(session)
+    assert record["turns"][0].get("isCancelled") is None
+    assert record["turns"][1].get("isCancelled") is True
+    assert record["turns"][2].get("isCancelled") is None
+
+    restored = ConversationSessionRepository._to_domain(record)
+    assert restored.turns[0].is_cancelled is False
+    assert restored.turns[1].is_cancelled is True
+    assert restored.turns[2].is_cancelled is False
+
+    legacy_record = {
+        "sessionId": "s-legacy-1",
+        "userId": "u-1",
+        "title": "레거시 세션",
+        "turns": [
+            {"role": "user", "content": "질문", "createdAt": now},
+            {"role": "assistant", "content": "레거시 답변", "createdAt": now},
+        ],
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    restored_legacy = ConversationSessionRepository._to_domain(legacy_record)
+    assert restored_legacy.turns[0].is_cancelled is False
+    assert restored_legacy.turns[1].is_cancelled is False
+
+
+def test_session_turn_out_serialization_with_is_cancelled():
+    now = datetime.now(UTC)
+    turn = ConversationTurn.of_assistant("중단된 답변", is_cancelled=True)
+    turn_out = TurnOut.from_domain(turn)
+    data = turn_out.model_dump(by_alias=True)
+    assert data["isCancelled"] is True
+
+    normal_turn = ConversationTurn.of_assistant("정상 답변")
+    normal_turn_out = TurnOut.from_domain(normal_turn)
+    normal_data = normal_turn_out.model_dump(by_alias=True)
+    assert normal_data["isCancelled"] is False
+
+    session = ConversationSession.restore(
+        RestoreProps(
+            session_id="sess-cancel-1",
+            user_id="user-1",
+            title="세션",
+            turns=[
+                TurnRecord(role="user", content="질문", created_at=now),
+                TurnRecord(
+                    role="assistant",
+                    content="중단된 답변",
+                    created_at=now,
+                    is_cancelled=True,
+                ),
+            ],
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    detail = SessionDetailOut.from_domain(session)
+    detail_data = detail.model_dump(by_alias=True)
+    assert detail_data["turns"][0]["isCancelled"] is False
+    assert detail_data["turns"][1]["isCancelled"] is True
+
+
