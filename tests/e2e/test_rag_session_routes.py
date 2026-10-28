@@ -506,4 +506,43 @@ async def test_get_session_returns_is_cancelled_field() -> None:
     assert body["turns"][2]["isCancelled"] is False
 
 
+async def test_get_session_detail_handles_legacy_mongodb_document_without_iscancelled() -> None:
+    """수용 기준 1: Given 중단 플래그가 없는 기존 대화 세션 데이터가 MongoDB에 저장되어 있을 때
+    When GET /rag/sessions/:sessionId로 세션 상세를 조회하면
+    Then 모든 턴의 isCancelled 필드가 false로 기본 반환되고 오류 없이 정상 응답한다.
+    """
+    now = datetime.now(UTC)
+    legacy_mongo_doc: dict[str, Any] = {
+        "sessionId": "legacy-session-ac1",
+        "userId": "user-1",
+        "title": "레거시 대화 세션",
+        "turns": [
+            {"role": "user", "content": "레거시 질문 1", "createdAt": now},
+            {"role": "assistant", "content": "레거시 답변 1", "createdAt": now},
+            {"role": "user", "content": "레거시 질문 2", "createdAt": now},
+            {"role": "assistant", "content": "레거시 답변 2", "createdAt": now},
+        ],
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    legacy_session = ConversationSessionRepository._to_domain(legacy_mongo_doc)
+
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+    repo_mock.find_by_id_for_user = AsyncMock(return_value=legacy_session)
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/rag/sessions/legacy-session-ac1?userId=user-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sessionId"] == "legacy-session-ac1"
+    assert len(body["turns"]) == 4
+    for turn in body["turns"]:
+        assert "isCancelled" in turn
+        assert turn["isCancelled"] is False
+
+
+
 

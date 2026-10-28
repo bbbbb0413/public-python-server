@@ -597,6 +597,77 @@ async def test_ask_requested_consumer_cancelled_before_first_chunk():
 
 
 @pytest.mark.asyncio
+async def test_ask_requested_consumer_complex_cancelled_persists_cancellation():
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+    # 첫 청크 이후 취소 감지
+    redis_mock.get = AsyncMock(side_effect=[None, b"1", b"1"])
+
+    agentic_use_case_mock = MagicMock(spec=AgenticAskUseCase)
+
+    async def fake_agentic_execute(_command) -> AsyncIterator[str]:
+        yield "에이전틱 첫 토큰 "
+        yield "에이전틱 두번째 토큰 "
+
+    agentic_use_case_mock.execute.side_effect = fake_agentic_execute
+
+    router_mock = MagicMock(spec=QueryComplexityRouter)
+    router_mock.route.return_value = "complex"
+
+    validator_mock = MagicMock(spec=RagContentValidator)
+    validator_mock.inspect_input.return_value = GuardrailVerdict.allow()
+
+    initial_session = ConversationSession.create("user-1", "복합 질의")
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id = AsyncMock(return_value=initial_session)
+    session_repo_mock.persist = AsyncMock(return_value=initial_session)
+    session_repo_mock.update = AsyncMock(return_value=initial_session)
+
+    composition = RagComposition(
+        ask_use_case=MagicMock(spec=AskUseCase),
+        agentic_ask_use_case=agentic_use_case_mock,
+        query_complexity_router=router_mock,
+        rag_validator=validator_mock,
+        secret_pii_scanner=SecretPiiScanner(),
+        get_session_use_case=MagicMock(spec=GetSessionUseCase),
+        get_sessions_use_case=MagicMock(spec=GetSessionsUseCase),
+        delete_session_use_case=MagicMock(),
+        session_repo=session_repo_mock,
+        budget=IterationBudget.of(3, 1000, 5000),
+        confidence_threshold=0.8,
+        hyde_max_query_words=5,
+        guardrail_enabled=False,
+    )
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+
+    message = AskRequestedMessage(
+        job_id="test-job-cancel-complex",
+        user_id="user-1",
+        question="복합 질의",
+        session_id=initial_session.get_session_id(),
+    )
+    await consumer._process(message)
+
+    # 토큰 발행은 첫번째 청크만
+    token_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "token"
+    ]
+    assert len(token_calls) == 1
+    assert token_calls[0].args[1]["data"] == "에이전틱 첫 토큰 "
+
+    # 세션 저장은 중단 시점까지의 내용과 is_cancelled=True로 영속화
+    session_repo_mock.update.assert_awaited_once()
+    updated_session = session_repo_mock.update.await_args[0][0]
+    assert len(updated_session.turns) == 2
+    assert updated_session.turns[1].content == "에이전틱 첫 토큰 "
+    assert updated_session.turns[1].is_cancelled is True
+
+
+
+@pytest.mark.asyncio
 async def test_ask_requested_consumer_complex_persists_confidence_and_missing_to_session():
     redis_mock = MagicMock(spec=Redis)
     redis_mock.xadd = AsyncMock()
