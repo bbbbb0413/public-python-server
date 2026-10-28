@@ -163,10 +163,12 @@ class AskRequestedConsumer:
         # 에이전틱 경로는 자체 on_progress로 searching/generating/critiquing/refining을
         # 이미 관리하므로 여기서는 단순 경로에서만 "generating" 전환을 한 번 알린다.
         generating_announced = complexity == "complex"
+        was_cancelled = False
         async for chunk in stream:
             is_cancelled = await self._redis.get(f"job:{message.job_id}:cancelled")
             if is_cancelled:
                 logger.info("ask job 취소 감지됨: jobId=%s", message.job_id)
+                was_cancelled = True
                 break
 
             if chunk.startswith(_SOURCES_PREFIX):
@@ -193,8 +195,8 @@ class AskRequestedConsumer:
                 collected.append(safe)
                 await self._publisher.publish_token(message.job_id, safe)
 
-        if session is not None and collected:
-            full_response = "".join(collected)
+        if session is not None and (collected or was_cancelled):
+            full_response = "".join(collected) if collected else "답변 생성이 중단되었습니다."
             updated = session.append_turn(
                 message.question,
                 full_response,
@@ -202,6 +204,7 @@ class AskRequestedConsumer:
                 confidence=last_confidence,
                 missing=last_missing,
                 iterations=last_iteration,
+                is_cancelled=was_cancelled,
             )
             await composition.session_repo.update(updated)
 

@@ -112,6 +112,7 @@ class ConversationSessionRepository:
                         confidence=t.get("confidence"),
                         missing=t.get("missing"),
                         iterations=t.get("iterations"),
+                        is_cancelled=bool(t.get("isCancelled", False)),
                     )
                     for t in record["turns"]
                 ],
@@ -138,6 +139,8 @@ class ConversationSessionRepository:
                 turn_dict["missing"] = t.missing
             if t.iterations is not None:
                 turn_dict["iterations"] = t.iterations
+            if t.is_cancelled:
+                turn_dict["isCancelled"] = True
             turns_data.append(turn_dict)
 
         return {
