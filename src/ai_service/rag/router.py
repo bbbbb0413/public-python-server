@@ -38,7 +38,7 @@ async def get_sessions(
 ) -> list[SessionOut]:
     effective_keyword = keyword if keyword is not None else q
     sessions = await service.get_sessions(user_id, page, limit, effective_keyword)
-    return [SessionOut.from_domain(s) for s in sessions]
+    return [SessionOut.from_domain(s, effective_keyword) for s in sessions]
 
 
 @sessions_router.get("/{session_id}", response_model=SessionDetailOut, response_model_by_alias=True)
