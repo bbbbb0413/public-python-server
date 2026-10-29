@@ -544,5 +544,112 @@ async def test_get_session_detail_handles_legacy_mongodb_document_without_iscanc
         assert turn["isCancelled"] is False
 
 
+async def test_get_sessions_with_keyword_returns_snippet_from_turn_content() -> None:
+    now = datetime.now(UTC)
+    session = ConversationSession.restore(
+        RestoreProps(
+            session_id="session-welfare-1",
+            user_id="user-1",
+            title="회사 복지 제도",
+            turns=[
+                TurnRecord(role="user", content="복지 제도가 어떻게 되나요?", created_at=now),
+                TurnRecord(
+                    role="assistant",
+                    content="연차 유급휴가는 입사 1년 후 15일 부여됩니다.",
+                    created_at=now,
+                ),
+            ],
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+    repo_mock.find_by_user_id = AsyncMock(return_value=[session])
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/rag/sessions?userId=user-1&keyword=유급휴가")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["sessionId"] == "session-welfare-1"
+    assert body[0]["title"] == "회사 복지 제도"
+    assert "snippet" in body[0]
+    assert body[0]["snippet"] is not None
+    assert "유급휴가" in body[0]["snippet"]
+    repo_mock.find_by_user_id.assert_awaited_once_with("user-1", 1, 10, "유급휴가")
+
+
+async def test_get_sessions_without_keyword_returns_snippet_none() -> None:
+    now = datetime.now(UTC)
+    session = ConversationSession.restore(
+        RestoreProps(
+            session_id="session-general-1",
+            user_id="user-1",
+            title="일반 대화",
+            turns=[
+                TurnRecord(role="user", content="안녕", created_at=now),
+                TurnRecord(role="assistant", content="안녕하세요!", created_at=now),
+            ],
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+    repo_mock.find_by_user_id = AsyncMock(return_value=[session])
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/rag/sessions?userId=user-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["sessionId"] == "session-general-1"
+    assert body[0]["snippet"] is None
+
+
+async def test_get_sessions_special_character_keyword_and_owner_isolation() -> None:
+    now = datetime.now(UTC)
+    session = ConversationSession.restore(
+        RestoreProps(
+            session_id="session-user1-special",
+            user_id="user-1",
+            title="특수문자 질의",
+            turns=[
+                TurnRecord(
+                    role="assistant",
+                    content="쿠폰 코드 [긴급] $100 적용 완료되었습니다.",
+                    created_at=now,
+                ),
+            ],
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+    repo_mock.find_by_user_id = AsyncMock(return_value=[session])
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/rag/sessions?userId=user-1&keyword=[긴급] $100"
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["sessionId"] == "session-user1-special"
+    assert body[0]["snippet"] is not None
+    assert "[긴급] $100" in body[0]["snippet"]
+    repo_mock.find_by_user_id.assert_awaited_once_with("user-1", 1, 10, "[긴급] $100")
+
+
+
+
 
 

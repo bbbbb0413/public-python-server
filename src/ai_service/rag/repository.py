@@ -54,7 +54,8 @@ class ConversationSessionRepository:
     ) -> list[ConversationSession]:
         query: dict[str, Any] = {"userId": user_id}
         if keyword and keyword.strip():
-            query["title"] = {"$regex": re.escape(keyword.strip()), "$options": "i"}
+            regex_cond = {"$regex": re.escape(keyword.strip()), "$options": "i"}
+            query["$or"] = [{"title": regex_cond}, {"turns.content": regex_cond}]
         skip = (page - 1) * limit
         cursor = (
             self._collection.find(query).sort("updatedAt", -1).skip(skip).limit(limit)

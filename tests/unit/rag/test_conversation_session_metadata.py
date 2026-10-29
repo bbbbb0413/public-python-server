@@ -343,3 +343,96 @@ def test_session_turn_out_serialization_with_is_cancelled():
     assert detail_data["turns"][1]["isCancelled"] is True
 
 
+def test_session_out_snippet_extraction():
+    now = datetime.now(UTC)
+    session = ConversationSession.restore(
+        RestoreProps(
+            session_id="s-snippet-1",
+            user_id="u-1",
+            title="회사 복지 제도",
+            turns=[
+                TurnRecord(role="user", content="복지 제도가 궁금합니다.", created_at=now),
+                TurnRecord(
+                    role="assistant",
+                    content=(
+                        "연차 유급휴가는 입사 1년 후\r\n"
+                        "15일   부여됩니다.\n추가 문의는 인사팀으로 연락하세요."
+                    ),
+                    created_at=now,
+                ),
+            ],
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+    # 1. 키워드 없음 -> snippet None
+    out_no_kw = SessionOut.from_domain(session)
+    assert out_no_kw.snippet is None
+
+    # 2. 공백 키워드 -> snippet None
+    out_empty_kw = SessionOut.from_domain(session, keyword="   ")
+    assert out_empty_kw.snippet is None
+
+    # 3. 매칭 안 되는 키워드 -> snippet None
+    out_not_matched = SessionOut.from_domain(session, keyword="퇴직금")
+    assert out_not_matched.snippet is None
+
+    # 4. 매칭되는 키워드 -> 개행/공백 정리 및 주변 문맥 포함
+    out_matched = SessionOut.from_domain(session, keyword="유급휴가")
+    assert out_matched.snippet is not None
+    assert "유급휴가" in out_matched.snippet
+    assert "\n" not in out_matched.snippet
+    assert "\r" not in out_matched.snippet
+    assert "  " not in out_matched.snippet
+    assert len(out_matched.snippet) <= 100
+
+    # 5. 대소문자 무시 매칭
+    session_case = ConversationSession.restore(
+        RestoreProps(
+            session_id="s-snippet-2",
+            user_id="u-1",
+            title="API 질문",
+            turns=[
+                TurnRecord(
+                    role="assistant",
+                    content="FastAPI RESTful Endpoint Guide",
+                    created_at=now,
+                )
+            ],
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    out_case = SessionOut.from_domain(session_case, keyword="fastapi")
+    assert out_case.snippet is not None
+    assert "FastAPI" in out_case.snippet
+
+    # 6. 특수문자 키워드 검색
+    session_special = ConversationSession.restore(
+        RestoreProps(
+            session_id="s-snippet-3",
+            user_id="u-1",
+            title="특수문자 테스트",
+            turns=[
+                TurnRecord(
+                    role="assistant",
+                    content="가격 정책 안내: [긴급] 프로모션 상품은 $100 할인됩니다.",
+                    created_at=now,
+                )
+            ],
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    out_special = SessionOut.from_domain(session_special, keyword="[긴급] 프로모션")
+    assert out_special.snippet is not None
+    assert "[긴급] 프로모션" in out_special.snippet
+
+    out_dollar = SessionOut.from_domain(session_special, keyword="$100")
+    assert out_dollar.snippet is not None
+    assert "$100" in out_dollar.snippet
+
+
+
+

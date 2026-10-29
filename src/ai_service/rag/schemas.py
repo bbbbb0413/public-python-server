@@ -1,3 +1,4 @@
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -409,15 +410,40 @@ class SessionOut(BaseModel):
     title: str
     is_bookmarked: bool = Field(default=False, alias="isBookmarked")
     updated_at: datetime = Field(alias="updatedAt")
+    snippet: str | None = Field(default=None, alias="snippet")
 
     @classmethod
-    def from_domain(cls, session: ConversationSession) -> "SessionOut":
+    def from_domain(
+        cls, session: ConversationSession, keyword: str | None = None
+    ) -> "SessionOut":
+        snippet = cls._extract_snippet(session.turns, keyword)
         return cls(
             sessionId=session.get_session_id(),
             title=session.title,
             isBookmarked=session.is_bookmarked,
             updatedAt=session.updated_at,
+            snippet=snippet,
         )
+
+    @staticmethod
+    def _extract_snippet(
+        turns: list[ConversationTurn], keyword: str | None
+    ) -> str | None:
+        if not keyword or not keyword.strip():
+            return None
+        cleaned_kw = keyword.strip()
+        pattern = re.compile(re.escape(cleaned_kw), re.IGNORECASE)
+        for turn in turns:
+            if not turn.content:
+                continue
+            cleaned_content = re.sub(r"[\r\n]+", " ", turn.content)
+            cleaned_content = re.sub(r"\s+", " ", cleaned_content).strip()
+            match = pattern.search(cleaned_content)
+            if match:
+                start_idx = match.start()
+                prefix_start = max(0, start_idx - 20)
+                return cleaned_content[prefix_start : prefix_start + 100]
+        return None
 
 
 class ToggleBookmarkIn(BaseModel):
