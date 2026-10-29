@@ -649,6 +649,115 @@ async def test_get_sessions_special_character_keyword_and_owner_isolation() -> N
     repo_mock.find_by_user_id.assert_awaited_once_with("user-1", 1, 10, "[긴급] $100")
 
 
+async def test_get_sessions_owner_isolation_does_not_return_other_user_sessions() -> None:
+    now = datetime.now(UTC)
+    session_user2 = ConversationSession.restore(
+        RestoreProps(
+            session_id="session-user-2-welfare",
+            user_id="user-2",
+            title="다른 사용자 대화",
+            turns=[
+                TurnRecord(
+                    role="assistant",
+                    content="연차 유급휴가는 입사 1년 후 15일 부여됩니다.",
+                    created_at=now,
+                ),
+            ],
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+    all_sessions = [session_user2]
+
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+
+    async def mock_find_by_user_id(
+        user_id: str, page: int = 1, limit: int = 10, keyword: str | None = None
+    ) -> list[ConversationSession]:
+        return [s for s in all_sessions if s.get_user_id() == user_id]
+
+    repo_mock.find_by_user_id = AsyncMock(side_effect=mock_find_by_user_id)
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/rag/sessions?userId=user-1&keyword=유급휴가")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body == []
+    repo_mock.find_by_user_id.assert_awaited_once_with("user-1", 1, 10, "유급휴가")
+
+
+@pytest.mark.parametrize("empty_kw", ["", "   "])
+async def test_get_sessions_with_empty_or_whitespace_keyword_returns_snippet_none(
+    empty_kw: str,
+) -> None:
+    now = datetime.now(UTC)
+    session = ConversationSession.restore(
+        RestoreProps(
+            session_id="session-empty-kw",
+            user_id="user-1",
+            title="일반 대화",
+            turns=[
+                TurnRecord(role="user", content="안녕하세요", created_at=now),
+                TurnRecord(role="assistant", content="반갑습니다.", created_at=now),
+            ],
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+    repo_mock.find_by_user_id = AsyncMock(return_value=[session])
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(f"/rag/sessions?userId=user-1&keyword={empty_kw}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["snippet"] is None
+
+
+@pytest.mark.parametrize("kw", ["매출 (Q3)", "[긴급] 배송", "$100"])
+async def test_get_sessions_spec_special_character_keywords(kw: str) -> None:
+    now = datetime.now(UTC)
+    session = ConversationSession.restore(
+        RestoreProps(
+            session_id=f"session-spec-{kw}",
+            user_id="user-1",
+            title="특수문자 테스트",
+            turns=[
+                TurnRecord(
+                    role="assistant",
+                    content=f"결과 안내: 본문에 {kw} 내용이 포함되어 있습니다.",
+                    created_at=now,
+                ),
+            ],
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+    repo_mock.find_by_user_id = AsyncMock(return_value=[session])
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/rag/sessions", params={"userId": "user-1", "keyword": kw})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["snippet"] is not None
+    assert kw in body[0]["snippet"]
+    repo_mock.find_by_user_id.assert_awaited_once_with("user-1", 1, 10, kw)
+
+
+
 
 
 
