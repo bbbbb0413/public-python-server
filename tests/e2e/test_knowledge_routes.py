@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from ai_service.core.config import Settings, get_settings
 from ai_service.knowledge.application.ingest_document_use_case import IngestDocumentUseCase
 from ai_service.knowledge.dependencies import get_document_repository, get_ingest_use_case
 from ai_service.knowledge.repository import DocumentRepository
@@ -115,3 +116,74 @@ async def test_retry_document_ingest_not_found_when_original_file_missing() -> N
     repo_mock.find_by_id.assert_awaited_once_with("doc-no-file")
     repo_mock.get_original_file.assert_awaited_once_with("doc-no-file")
     use_case_mock.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retry_document_ingest_server_error_when_use_case_fails() -> None:
+    repo_mock = MagicMock(spec=DocumentRepository)
+    existing_doc = Document(
+        id="doc-failed-1",
+        file_name="sample.txt",
+        mime_type="text/plain",
+        status="failed",
+        chunk_count=0,
+        created_at=datetime.now(UTC),
+    )
+    repo_mock.find_by_id = AsyncMock(return_value=existing_doc)
+    repo_mock.get_original_file = AsyncMock(
+        return_value=(b"sample content", "sample.txt", "text/plain")
+    )
+
+    use_case_mock = MagicMock(spec=IngestDocumentUseCase)
+    use_case_mock.execute = AsyncMock(side_effect=RuntimeError("Embedding model timeout"))
+
+    app.dependency_overrides[get_document_repository] = lambda: repo_mock
+    app.dependency_overrides[get_ingest_use_case] = lambda: use_case_mock
+
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/knowledge/documents/doc-failed-1/retry")
+
+    assert response.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_retry_document_ingest_auth_with_admin_key() -> None:
+    repo_mock = MagicMock(spec=DocumentRepository)
+    existing_doc = Document(
+        id="doc-failed-1",
+        file_name="sample.txt",
+        mime_type="text/plain",
+        status="failed",
+        chunk_count=0,
+        created_at=datetime.now(UTC),
+    )
+    repo_mock.find_by_id = AsyncMock(return_value=existing_doc)
+    repo_mock.get_original_file = AsyncMock(
+        return_value=(b"sample content", "sample.txt", "text/plain")
+    )
+
+    use_case_mock = MagicMock(spec=IngestDocumentUseCase)
+    use_case_mock.execute = AsyncMock(return_value=existing_doc)
+
+    app.dependency_overrides[get_document_repository] = lambda: repo_mock
+    app.dependency_overrides[get_ingest_use_case] = lambda: use_case_mock
+    app.dependency_overrides[get_settings] = lambda: Settings(admin_api_key="secret-key")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res_no_key = await client.post("/knowledge/documents/doc-failed-1/retry")
+        assert res_no_key.status_code == 401
+
+        res_invalid_key = await client.post(
+            "/knowledge/documents/doc-failed-1/retry",
+            headers={"x-admin-key": "wrong-key"},
+        )
+        assert res_invalid_key.status_code == 401
+
+        res_valid_key = await client.post(
+            "/knowledge/documents/doc-failed-1/retry",
+            headers={"x-admin-key": "secret-key"},
+        )
+        assert res_valid_key.status_code == 200
+
