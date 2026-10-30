@@ -1,8 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from ai_service.core.security import require_admin_api_key
-from ai_service.knowledge.dependencies import DocumentRepositoryDep, VectorStoreDep
-from ai_service.knowledge.schemas import ChunkOut, DocumentOut
+from ai_service.knowledge.dependencies import (
+    DocumentRepositoryDep,
+    IngestUseCaseDep,
+    VectorStoreDep,
+)
+from ai_service.knowledge.schemas import ChunkOut, DocumentOut, IngestDocumentCommand
 
 router = APIRouter(
     prefix="/knowledge/documents", tags=["knowledge"], dependencies=[Depends(require_admin_api_key)]
@@ -40,6 +44,31 @@ async def get_document_file(document_id: str, repo: DocumentRepositoryDep) -> Re
         media_type=mime_type,
         headers={"Content-Disposition": f'inline; filename="{file_name}"'},
     )
+
+
+@router.post("/{document_id}/retry", response_model=DocumentOut, response_model_by_alias=True)
+async def retry_document_ingest(
+    document_id: str,
+    repo: DocumentRepositoryDep,
+    ingest_use_case: IngestUseCaseDep,
+) -> DocumentOut:
+    document = await repo.find_by_id(document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail=f"문서를 찾을 수 없습니다: {document_id}")
+
+    original_file = await repo.get_original_file(document_id)
+    if original_file is None:
+        raise HTTPException(status_code=404, detail=f"원본 파일을 찾을 수 없습니다: {document_id}")
+
+    content, file_name, mime_type = original_file
+    command = IngestDocumentCommand(
+        document_id=document.id,
+        file_name=file_name,
+        mime_type=mime_type,
+        content=content,
+    )
+    processed = await ingest_use_case.execute(command)
+    return DocumentOut.from_domain(processed)
 
 
 @router.delete("/{document_id}", status_code=204)
