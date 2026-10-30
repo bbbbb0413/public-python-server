@@ -91,6 +91,28 @@ async def test_retry_document_ingest_not_found_when_doc_missing() -> None:
 
 
 @pytest.mark.asyncio
+async def test_retry_document_ingest_not_found_with_real_repo_when_id_invalid() -> None:
+    repo = DocumentRepository.__new__(DocumentRepository)
+    repo._collection = MagicMock()
+    repo._collection.find_one = AsyncMock(return_value=None)
+    mock_gridfs = MagicMock()
+    repo._gridfs = mock_gridfs
+
+    use_case_mock = MagicMock(spec=IngestDocumentUseCase)
+
+    app.dependency_overrides[get_document_repository] = lambda: repo
+    app.dependency_overrides[get_ingest_use_case] = lambda: use_case_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/knowledge/documents/doc-not-found/retry")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "문서를 찾을 수 없습니다: doc-not-found"
+    use_case_mock.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_retry_document_ingest_not_found_when_original_file_missing() -> None:
     repo_mock = MagicMock(spec=DocumentRepository)
     existing_doc = Document(
@@ -186,4 +208,3 @@ async def test_retry_document_ingest_auth_with_admin_key() -> None:
             headers={"x-admin-key": "secret-key"},
         )
         assert res_valid_key.status_code == 200
-

@@ -110,3 +110,14 @@ async def test_remove_deletes_original_file_and_document_record():
 
     mock_gridfs.find.assert_called_once_with({"filename": "507f1f77bcf86cd799439011"})
     repo._collection.delete_one.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_find_by_id_returns_none_when_invalid_object_id() -> None:
+    repo, _ = _make_repo()
+    repo._collection.find_one = AsyncMock()
+
+    result = await repo.find_by_id("doc-not-found")
+
+    assert result is None
+    repo._collection.find_one.assert_not_called()
