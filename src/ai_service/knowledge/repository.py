@@ -86,6 +86,8 @@ class DocumentRepository:
         return self._to_domain({**record, "_id": result.inserted_id})
 
     async def find_by_id(self, id: str) -> Document | None:
+        if not ObjectId.is_valid(id):
+            return None
         record = await self._collection.find_one({"_id": ObjectId(id)})
         return self._to_domain(record) if record else None
 

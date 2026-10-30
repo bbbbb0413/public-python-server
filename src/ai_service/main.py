@@ -57,6 +57,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     knowledge_composition = await build_knowledge_composition(settings, app.state.mongo_db)
     app.state.vector_store = knowledge_composition.vector_store
+    app.state.ingest_use_case = knowledge_composition.ingest_use_case
     ingest_requested_consumer = IngestRequestedConsumer(
         settings.kafka_brokers, redis_client, knowledge_composition
     )
