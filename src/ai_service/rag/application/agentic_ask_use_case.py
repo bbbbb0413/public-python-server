@@ -92,7 +92,7 @@ class AgenticAskUseCase:
         last_missing: list[str] = []
         accumulated_sources: dict[tuple[str, int], dict[str, Any]] = {}
         refined_queries: list[str] = []
-        next_query: str | None = None
+        next_query_display: str | None = None
 
         while True:
             await self._emit_progress(
@@ -101,9 +101,9 @@ class AgenticAskUseCase:
                 "searching",
                 last_confidence,
                 last_missing,
-                next_query=next_query,
+                next_query=next_query_display,
             )
-            next_query = None
+            next_query_display = None
 
             use_hyde = command.use_hyde if iteration == 1 else True
             hybrid_result = await self._hybrid_search.execute(
@@ -221,8 +221,10 @@ class AgenticAskUseCase:
                 return
 
             next_query = self._query_refiner.refine(search_question, critique)
-            refined_queries.append(next_query)
             current_query = next_query
+            masked_query = self._secret_pii_scanner.mask(next_query)
+            refined_queries.append(masked_query)
+            next_query_display = masked_query
 
             await self._emit_progress(
                 callback,
@@ -230,7 +232,7 @@ class AgenticAskUseCase:
                 "refining",
                 last_confidence,
                 last_missing,
-                next_query=next_query,
+                next_query=masked_query,
             )
             iteration += 1
 

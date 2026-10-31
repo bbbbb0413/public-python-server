@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -250,4 +251,80 @@ async def test_agentic_ask_budget_exhausted_emits_refined_queries(
     final_event = events[-1]
     assert final_event["phase"] == "generating"
     assert final_event.get("refinedQueries") == ["정제쿼리1"]
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_masks_refined_queries_in_progress_and_retains_raw_in_search(
+    mock_hybrid_search: AsyncMock,
+    mock_llm_gateway: MagicMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+) -> None:
+    # 1회차 불만족 -> 2회차 만족
+    mock_critique_generator.generate.side_effect = [
+        Critique.of(
+            answered=False,
+            missing=["담당자 연락처"],
+            next_query="담당자 user@example.com 추가 정보",
+            confidence=0.4,
+        ),
+        Critique.of(answered=True, missing=[], next_query="", confidence=0.92),
+    ]
+    raw_next_query = "담당자 user@example.com 추가 정보"
+    masked_next_query = "담당자 [REDACTED_EMAIL] 추가 정보"
+    mock_query_refiner.refine.return_value = raw_next_query
+
+    events: list[dict[str, Any]] = []
+
+    async def on_progress(data: dict[str, Any]) -> None:
+        events.append(data)
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+    )
+
+    command = AgenticAskCommand(
+        question="환불 문의",
+        budget=IterationBudget.of(max_iterations=3, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+        on_progress=on_progress,
+    )
+
+    chunks = [c async for c in use_case.execute(command)]
+    assert len(chunks) > 0
+
+    # 1회차: searching(0) -> generating(1) -> critiquing(2) -> refining(3)
+    # 2회차: searching(4) -> generating(5) -> critiquing(6) -> 완료 critiquing(7)
+    assert len(events) == 8
+
+    # 1회차 refining 단계 progress 이벤트: nextQuery에 마스킹 적용 확인
+    refining_event = events[3]
+    assert refining_event["phase"] == "refining"
+    assert refining_event.get("nextQuery") == masked_next_query
+
+    # 2회차 searching 단계 progress 이벤트: nextQuery에 마스킹 적용 확인
+    searching_event = events[4]
+    assert searching_event["phase"] == "searching"
+    assert searching_event["iteration"] == 2
+    assert searching_event.get("nextQuery") == masked_next_query
+
+    # 완료 시 누적된 refinedQueries에도 마스킹된 쿼리가 포함되는지 확인
+    done_event = events[7]
+    assert done_event["phase"] == "critiquing"
+    assert done_event.get("refinedQueries") == [masked_next_query]
+
+    # hybrid search에는 원문(마스킹되지 않은 raw_next_query)이 전달되었는지 확인
+    assert mock_hybrid_search.execute.call_count == 2
+    second_search_cmd = mock_hybrid_search.execute.call_args_list[1][0][0]
+    assert second_search_cmd.query == raw_next_query
+
 
