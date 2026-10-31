@@ -190,12 +190,14 @@ async def test_agentic_ask_multi_iteration_progress_events(
         "phase": "refining",
         "confidence": 0.5,
         "missing": ["결제 취소 정책"],
+        "nextQuery": "개선된 질문",
     }
     assert events[4] == {
         "iteration": 2,
         "phase": "searching",
         "confidence": 0.5,
         "missing": ["결제 취소 정책"],
+        "nextQuery": "개선된 질문",
     }
     assert events[5] == {
         "iteration": 2,
@@ -209,7 +211,13 @@ async def test_agentic_ask_multi_iteration_progress_events(
         "confidence": 0.5,
         "missing": ["결제 취소 정책"],
     }
-    assert events[7] == {"iteration": 2, "phase": "critiquing", "confidence": 0.95, "missing": []}
+    assert events[7] == {
+        "iteration": 2,
+        "phase": "critiquing",
+        "confidence": 0.95,
+        "missing": [],
+        "refinedQueries": ["개선된 질문"],
+    }
 
 
 @pytest.mark.asyncio
@@ -264,12 +272,14 @@ async def test_agentic_ask_budget_exhausted_progress_events(
         "phase": "refining",
         "confidence": 0.4,
         "missing": ["남은 정보"],
+        "nextQuery": "개선된 질문",
     }
     assert events[4] == {
         "iteration": 2,
         "phase": "searching",
         "confidence": 0.4,
         "missing": ["남은 정보"],
+        "nextQuery": "개선된 질문",
     }
     assert events[5] == {
         "iteration": 2,
@@ -282,6 +292,7 @@ async def test_agentic_ask_budget_exhausted_progress_events(
         "phase": "generating",
         "confidence": 0.4,
         "missing": ["남은 정보"],
+        "refinedQueries": ["개선된 질문"],
     }
 
 

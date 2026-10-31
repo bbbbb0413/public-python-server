@@ -91,11 +91,19 @@ class AgenticAskUseCase:
         last_confidence = 0.0
         last_missing: list[str] = []
         accumulated_sources: dict[tuple[str, int], dict[str, Any]] = {}
+        refined_queries: list[str] = []
+        next_query_display: str | None = None
 
         while True:
             await self._emit_progress(
-                callback, iteration, "searching", last_confidence, last_missing
+                callback,
+                iteration,
+                "searching",
+                last_confidence,
+                last_missing,
+                next_query=next_query_display,
             )
+            next_query_display = None
 
             use_hyde = command.use_hyde if iteration == 1 else True
             hybrid_result = await self._hybrid_search.execute(
@@ -182,7 +190,12 @@ class AgenticAskUseCase:
                         last_confidence = 0.0
                         last_missing = ["관련 지식베이스 문서를 찾지 못함"]
                 await self._emit_progress(
-                    callback, iteration, "generating", last_confidence, last_missing
+                    callback,
+                    iteration,
+                    "generating",
+                    last_confidence,
+                    last_missing,
+                    refined_queries=refined_queries,
                 )
                 return
 
@@ -198,15 +211,29 @@ class AgenticAskUseCase:
 
             if critique.is_satisfied(command.confidence_threshold):
                 await self._emit_progress(
-                    callback, iteration, "critiquing", last_confidence, last_missing
+                    callback,
+                    iteration,
+                    "critiquing",
+                    last_confidence,
+                    last_missing,
+                    refined_queries=refined_queries,
                 )
                 return
 
-            await self._emit_progress(
-                callback, iteration, "refining", last_confidence, last_missing
-            )
+            next_query = self._query_refiner.refine(search_question, critique)
+            current_query = next_query
+            masked_query = self._secret_pii_scanner.mask(next_query)
+            refined_queries.append(masked_query)
+            next_query_display = masked_query
 
-            current_query = self._query_refiner.refine(search_question, critique)
+            await self._emit_progress(
+                callback,
+                iteration,
+                "refining",
+                last_confidence,
+                last_missing,
+                next_query=masked_query,
+            )
             iteration += 1
 
     async def _emit_progress(
@@ -216,15 +243,21 @@ class AgenticAskUseCase:
         phase: str,
         confidence: float,
         missing: list[str],
+        next_query: str | None = None,
+        refined_queries: list[str] | None = None,
     ) -> None:
         if callback is None:
             return
-        payload = {
+        payload: dict[str, Any] = {
             "iteration": iteration,
             "phase": phase,
             "confidence": confidence,
             "missing": list(missing),
         }
+        if next_query is not None:
+            payload["nextQuery"] = next_query
+        if refined_queries:
+            payload["refinedQueries"] = list(refined_queries)
         try:
             res = callback(payload)
             if inspect.isawaitable(res):

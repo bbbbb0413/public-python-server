@@ -329,7 +329,12 @@ async def test_ask_requested_consumer_complex_publishes_done_with_metadata():
     assert len(done_calls) == 1
     assert "data" in done_calls[0].args[1]
     done_data = json.loads(done_calls[0].args[1]["data"])
-    assert done_data == {"confidence": 0.85, "missing": ["추가 설명"], "iterations": 1}
+    assert done_data == {
+        "confidence": 0.85,
+        "missing": ["추가 설명"],
+        "iterations": 1,
+        "refinedQueries": [],
+    }
 
 
 @pytest.mark.asyncio
@@ -424,7 +429,12 @@ async def test_ask_requested_consumer_complex_multiple_iterations_publishes_late
     assert len(done_calls) == 1
     assert "data" in done_calls[0].args[1]
     done_data = json.loads(done_calls[0].args[1]["data"])
-    assert done_data == {"confidence": 0.95, "missing": [], "iterations": 2}
+    assert done_data == {
+        "confidence": 0.95,
+        "missing": [],
+        "iterations": 2,
+        "refinedQueries": [],
+    }
 
     session_repo_mock.update.assert_awaited_once()
     updated_session = session_repo_mock.update.await_args[0][0]

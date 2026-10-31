@@ -115,16 +115,27 @@ class AskRequestedConsumer:
         last_confidence: float | None = None
         last_missing: list[str] | None = None
         last_iteration: int | None = None
+        last_refined_queries: list[str] | None = None
 
         if complexity == "complex":
+            last_refined_queries = []
+
             async def on_progress(data: dict[str, Any]) -> None:
-                nonlocal last_confidence, last_missing, last_iteration
+                nonlocal last_confidence, last_missing, last_iteration, last_refined_queries
                 if "confidence" in data:
                     last_confidence = data["confidence"]
                 if "missing" in data:
                     last_missing = data["missing"]
                 if "iteration" in data:
                     last_iteration = data["iteration"]
+                if "refinedQueries" in data and isinstance(data["refinedQueries"], list):
+                    last_refined_queries = list(data["refinedQueries"])
+                elif "nextQuery" in data and data["nextQuery"]:
+                    nq = data["nextQuery"]
+                    if last_refined_queries is None:
+                        last_refined_queries = []
+                    if nq not in last_refined_queries:
+                        last_refined_queries.append(nq)
                 await self._publisher.publish_progress(message.job_id, data)
 
             stream = composition.agentic_ask_use_case.execute(
@@ -205,6 +216,7 @@ class AskRequestedConsumer:
                 missing=last_missing,
                 iterations=last_iteration,
                 is_cancelled=was_cancelled,
+                refined_queries=last_refined_queries,
             )
             await composition.session_repo.update(updated)
 
@@ -216,6 +228,8 @@ class AskRequestedConsumer:
             }
             if last_iteration is not None:
                 done_data["iterations"] = last_iteration
+            if last_refined_queries is not None:
+                done_data["refinedQueries"] = last_refined_queries
 
         await self._publisher.publish_done(message.job_id, done_data)
 
