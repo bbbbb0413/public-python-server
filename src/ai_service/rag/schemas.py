@@ -37,6 +37,7 @@ class TurnValue:
     missing: list[str] | None = None
     iterations: int | None = None
     is_cancelled: bool = False
+    refined_queries: list[str] | None = None
 
 
 class ConversationTurn:
@@ -56,6 +57,7 @@ class ConversationTurn:
         missing: list[str] | None = None,
         iterations: int | None = None,
         is_cancelled: bool = False,
+        refined_queries: list[str] | None = None,
     ) -> "ConversationTurn":
         return cls(
             TurnValue(
@@ -67,6 +69,7 @@ class ConversationTurn:
                 missing=missing,
                 iterations=iterations,
                 is_cancelled=is_cancelled,
+                refined_queries=refined_queries,
             )
         )
 
@@ -106,6 +109,10 @@ class ConversationTurn:
     def is_cancelled(self) -> bool:
         return self._value.is_cancelled
 
+    @property
+    def refined_queries(self) -> list[str] | None:
+        return self._value.refined_queries
+
 
 @dataclass(frozen=True)
 class TurnRecord:
@@ -117,6 +124,7 @@ class TurnRecord:
     missing: list[str] | None = None
     iterations: int | None = None
     is_cancelled: bool = False
+    refined_queries: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -168,6 +176,7 @@ class ConversationSession:
                     missing=t.missing,
                     iterations=t.iterations,
                     is_cancelled=t.is_cancelled,
+                    refined_queries=t.refined_queries,
                 )
             )
             for t in props.turns
@@ -191,6 +200,7 @@ class ConversationSession:
         missing: list[str] | None = None,
         iterations: int | None = None,
         is_cancelled: bool = False,
+        refined_queries: list[str] | None = None,
     ) -> "ConversationSession":
         new_turns = [
             *self._turns,
@@ -202,6 +212,7 @@ class ConversationSession:
                 missing=missing,
                 iterations=iterations,
                 is_cancelled=is_cancelled,
+                refined_queries=refined_queries,
             ),
         ]
         return ConversationSession(
@@ -388,6 +399,7 @@ class SessionTurnOut(BaseModel):
     missing: list[str] | None = None
     iterations: int | None = None
     is_cancelled: bool = Field(default=False, alias="isCancelled")
+    refined_queries: list[str] | None = Field(default=None, alias="refinedQueries")
 
     @classmethod
     def from_domain(cls, turn: ConversationTurn) -> "SessionTurnOut":
@@ -400,6 +412,7 @@ class SessionTurnOut(BaseModel):
             missing=turn.missing,
             iterations=turn.iterations,
             isCancelled=turn.is_cancelled,
+            refinedQueries=turn.refined_queries,
         )
 
 

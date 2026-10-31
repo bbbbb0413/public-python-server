@@ -84,6 +84,45 @@ async def test_get_session_returns_turns_with_metadata() -> None:
     assert body["turns"][1]["iterations"] == 2
 
 
+async def test_get_session_returns_turns_with_refined_queries() -> None:
+    now = datetime.now(UTC)
+    props = RestoreProps(
+        session_id="session-refined-123",
+        user_id="user-1",
+        title="정제 쿼리 세션",
+        turns=[
+            TurnRecord(role="user", content="복합 질문", created_at=now),
+            TurnRecord(
+                role="assistant",
+                content="종합 답변입니다.",
+                created_at=now,
+                confidence=0.88,
+                missing=[],
+                iterations=2,
+                refined_queries=["보완 검색 쿼리 1", "보완 검색 쿼리 2"],
+            ),
+        ],
+        created_at=now,
+        updated_at=now,
+    )
+    session = ConversationSession.restore(props)
+
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+    repo_mock.find_by_id_for_user = AsyncMock(return_value=session)
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/rag/sessions/session-refined-123?userId=user-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sessionId"] == "session-refined-123"
+    assert len(body["turns"]) == 2
+    assert body["turns"][0]["refinedQueries"] is None
+    assert body["turns"][1]["refinedQueries"] == ["보완 검색 쿼리 1", "보완 검색 쿼리 2"]
+
+
 async def test_get_session_with_zero_confidence_and_ungrounded_warning() -> None:
     now = datetime.now(UTC)
     props = RestoreProps(
