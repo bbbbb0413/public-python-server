@@ -74,3 +74,19 @@ def test_repository_to_domain_backward_compatibility_without_refined_queries() -
     }
     session = ConversationSessionRepository._to_domain(record)
     assert session.turns[0].refined_queries is None
+
+
+def test_repository_roundtrip_with_empty_refined_queries() -> None:
+    session = ConversationSession.create("user-1", "1회차 만족 질문")
+    updated = session.append_turn(
+        user_content="질문",
+        assistant_content="1회차에 해결된 답변",
+        refined_queries=[],
+    )
+    record = ConversationSessionRepository._to_record(updated)
+    assistant_record = record["turns"][1]
+    assert assistant_record["refinedQueries"] == []
+
+    restored = ConversationSessionRepository._to_domain(record)
+    assert restored.turns[1].refined_queries == []
+

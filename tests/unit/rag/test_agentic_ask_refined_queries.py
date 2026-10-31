@@ -203,3 +203,51 @@ async def test_agentic_ask_multi_refinements_accumulates_refined_queries(
     # 최종 이벤트에서 누적된 쿼리 목록 확인
     final_event = events[-1]
     assert final_event.get("refinedQueries") == ["정제쿼리1", "정제쿼리2"]
+
+
+@pytest.mark.asyncio
+async def test_agentic_ask_budget_exhausted_emits_refined_queries(
+    mock_hybrid_search: AsyncMock,
+    mock_llm_gateway: MagicMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_critique_generator: AsyncMock,
+    mock_query_refiner: MagicMock,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+):
+    mock_critique_generator.generate.side_effect = [
+        Critique.of(answered=False, missing=["항목1"], next_query="q1", confidence=0.3),
+        Critique.of(answered=False, missing=["항목2"], next_query="q2", confidence=0.5),
+    ]
+    mock_query_refiner.refine.return_value = "정제쿼리1"
+
+    events: list[dict] = []
+
+    async def on_progress(data: dict) -> None:
+        events.append(data)
+
+    use_case = AgenticAskUseCase(
+        hybrid_search=mock_hybrid_search,
+        llm_gateway=mock_llm_gateway,
+        get_active_prompt=mock_get_active_prompt,
+        critique_generator=mock_critique_generator,
+        query_refiner=mock_query_refiner,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+    )
+
+    command = AgenticAskCommand(
+        question="예산 초과 테스트 질문",
+        budget=IterationBudget.of(max_iterations=2, token_budget=1000, timeout_ms=5000),
+        confidence_threshold=0.8,
+        on_progress=on_progress,
+    )
+
+    [c async for c in use_case.execute(command)]
+
+    # 1회차: searching(0) -> generating(1) -> critiquing(2) -> refining(3)
+    # 2회차: searching(4) -> generating(5) -> critiquing(6) -> 예산 초과 generating(7)
+    final_event = events[-1]
+    assert final_event["phase"] == "generating"
+    assert final_event.get("refinedQueries") == ["정제쿼리1"]
+

@@ -89,3 +89,15 @@ def test_session_turn_out_from_domain_with_refined_queries() -> None:
     assert turn_out.refined_queries == ["보완 질문"]
     dumped = turn_out.model_dump(by_alias=True)
     assert dumped["refinedQueries"] == ["보완 질문"]
+
+
+def test_session_turn_out_from_domain_with_empty_refined_queries() -> None:
+    turn = ConversationTurn.of_assistant(
+        content="1회차 답변",
+        refined_queries=[],
+    )
+    turn_out = SessionTurnOut.from_domain(turn)
+    assert turn_out.refined_queries == []
+    dumped = turn_out.model_dump(by_alias=True)
+    assert dumped["refinedQueries"] == []
+
