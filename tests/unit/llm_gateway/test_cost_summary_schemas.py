@@ -61,3 +61,35 @@ def test_cost_summary_out_of_maps_token_metrics_and_call_count() -> None:
             "callCount": 5,
         }
     ]
+
+
+def test_cost_summary_out_of_empty_items() -> None:
+    from_date = datetime(2026, 11, 1, 0, 0, tzinfo=UTC)
+    to_date = datetime(2026, 11, 2, 0, 0, tzinfo=UTC)
+
+    out = CostSummaryOut.of([], from_date, to_date)
+    assert out.items == []
+
+    dumped = out.model_dump(by_alias=True)
+    assert dumped == {
+        "items": [],
+        "from": "2026-11-01T00:00:00+00:00",
+        "to": "2026-11-02T00:00:00+00:00",
+    }
+
+
+def test_cost_summary_item_populated_by_both_alias_and_field_name() -> None:
+    item_by_name = CostSummaryItem(
+        model="gpt-4o",
+        total_cost_usd=0.05,
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        call_count=3,
+    )
+    assert item_by_name.total_cost_usd == 0.05
+    assert item_by_name.prompt_tokens == 100
+    assert item_by_name.completion_tokens == 50
+    assert item_by_name.total_tokens == 150
+    assert item_by_name.call_count == 3
+
