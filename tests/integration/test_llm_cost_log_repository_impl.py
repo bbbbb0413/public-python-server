@@ -59,7 +59,13 @@ async def test_persist_and_sum_by_model(mongo_test_db) -> None:  # type: ignore[
     model_a_sum = next(s for s in sums if s.model == "model-a")
     model_b_sum = next(s for s in sums if s.model == "model-b")
     assert model_a_sum.total_cost_usd == 4.0
+    assert model_a_sum.prompt_tokens == 300
+    assert model_a_sum.completion_tokens == 150
+    assert model_a_sum.call_count == 2
     assert model_b_sum.total_cost_usd == 0.5
+    assert model_b_sum.prompt_tokens == 50
+    assert model_b_sum.completion_tokens == 20
+    assert model_b_sum.call_count == 1
 
 
 async def test_sum_by_model_filters_by_date(mongo_test_db) -> None:  # type: ignore[no-untyped-def]
