@@ -19,8 +19,10 @@ async def get_costs(
     from_: str | None = Query(default=None, alias="from"),
     to: str | None = Query(default=None),
 ) -> CostSummaryOut:
-    to_date = datetime.fromisoformat(to) if to else datetime.now(UTC)
-    from_date = datetime.fromisoformat(from_) if from_ else to_date - timedelta(days=7)
+    to_date = datetime.fromisoformat(to.replace(" ", "+")) if to else datetime.now(UTC)
+    from_date = (
+        datetime.fromisoformat(from_.replace(" ", "+")) if from_ else to_date - timedelta(days=7)
+    )
 
     items = await repo.sum_by_model(from_date, to_date)
     return CostSummaryOut.of(items, from_date, to_date)

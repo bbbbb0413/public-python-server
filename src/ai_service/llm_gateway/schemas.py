@@ -71,6 +71,9 @@ class ModelRoute:
 class ModelCostSum:
     model: str
     total_cost_usd: float
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    call_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,10 @@ class CostSummaryItem(BaseModel):
 
     model: str
     total_cost_usd: float = Field(alias="totalCostUsd")
+    prompt_tokens: int = Field(default=0, alias="promptTokens")
+    completion_tokens: int = Field(default=0, alias="completionTokens")
+    total_tokens: int = Field(default=0, alias="totalTokens")
+    call_count: int = Field(default=0, alias="callCount")
 
 
 class CostSummaryOut(BaseModel):
@@ -107,7 +114,17 @@ class CostSummaryOut(BaseModel):
         to_date: datetime,
     ) -> "CostSummaryOut":
         return cls(
-            items=[CostSummaryItem(model=i.model, totalCostUsd=i.total_cost_usd) for i in items],
+            items=[
+                CostSummaryItem(
+                    model=i.model,
+                    totalCostUsd=i.total_cost_usd,
+                    promptTokens=i.prompt_tokens,
+                    completionTokens=i.completion_tokens,
+                    totalTokens=i.prompt_tokens + i.completion_tokens,
+                    callCount=i.call_count,
+                )
+                for i in items
+            ],
             **{"from": from_date.isoformat(), "to": to_date.isoformat()},
         )
 

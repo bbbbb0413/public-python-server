@@ -45,12 +45,29 @@ class LlmCostLogRepository:
         cursor = self._collection.aggregate(
             [
                 {"$match": {"createdAt": {"$gte": from_, "$lte": to}}},
-                {"$group": {"_id": "$model", "totalCostUsd": {"$sum": "$costUsd"}}},
+                {
+                    "$group": {
+                        "_id": "$model",
+                        "totalCostUsd": {"$sum": "$costUsd"},
+                        "totalPromptTokens": {"$sum": "$promptTokens"},
+                        "totalCompletionTokens": {"$sum": "$completionTokens"},
+                        "callCount": {"$sum": 1},
+                    }
+                },
                 {"$sort": {"totalCostUsd": -1}},
             ]
         )
         results = await cursor.to_list(length=None)
-        return [ModelCostSum(model=r["_id"], total_cost_usd=r["totalCostUsd"]) for r in results]
+        return [
+            ModelCostSum(
+                model=r["_id"],
+                total_cost_usd=float(r.get("totalCostUsd") or 0.0),
+                prompt_tokens=int(r.get("totalPromptTokens") or 0),
+                completion_tokens=int(r.get("totalCompletionTokens") or 0),
+                call_count=int(r.get("callCount") or 0),
+            )
+            for r in results
+        ]
 
 
 # Backward compatibility alias
