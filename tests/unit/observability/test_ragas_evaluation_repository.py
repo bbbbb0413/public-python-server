@@ -102,3 +102,34 @@ async def test_find_recent_fallbacks_for_legacy_documents_without_answer_or_cont
     assert results[0].trace_id == "legacy-t1"
     assert results[0].answer == ""
     assert results[0].contexts == []
+
+
+@pytest.mark.asyncio
+async def test_find_recent_fallbacks_for_legacy_documents_with_null_answer_or_contexts() -> None:
+    repo, collection = _make_repo()
+    mock_cursor = MagicMock()
+    collection.find.return_value = mock_cursor
+    mock_cursor.sort.return_value = mock_cursor
+    mock_cursor.limit.return_value = mock_cursor
+    mock_cursor.to_list = AsyncMock(
+        return_value=[
+            {
+                "traceId": "null-t1",
+                "question": "null 필드 질문",
+                "faithfulness": 0.5,
+                "answerRelevancy": 0.5,
+                "contextPrecision": 0.5,
+                "sampledAt": datetime(2026, 1, 1, tzinfo=UTC),
+                "answer": None,
+                "contexts": None,
+            }
+        ]
+    )
+
+    results = await repo.find_recent(10)
+
+    assert len(results) == 1
+    assert results[0].trace_id == "null-t1"
+    assert results[0].answer == ""
+    assert results[0].contexts == []
+

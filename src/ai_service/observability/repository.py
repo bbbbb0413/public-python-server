@@ -36,8 +36,8 @@ class RagasEvaluationRepository:
                 answer_relevancy=r["answerRelevancy"],
                 context_precision=r["contextPrecision"],
                 sampled_at=r["sampledAt"],
-                answer=r.get("answer", ""),
-                contexts=r.get("contexts", []),
+                answer=r.get("answer") or "",
+                contexts=r.get("contexts") or [],
             )
             for r in records
         ]

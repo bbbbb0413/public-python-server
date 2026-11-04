@@ -159,3 +159,101 @@ async def test_ask_requested_consumer_isolates_ragas_eval_exception() -> None:
         if call.args[1].get("type") == "done"
     ]
     assert len(done_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_does_not_trigger_ragas_when_no_collected_tokens() -> None:
+    ragas_mock = MagicMock(spec=RagasEvalService)
+    ragas_mock.evaluate = AsyncMock()
+
+    composition, ask_mock = _make_composition(ragas_eval_service=ragas_mock)
+
+    async def fake_ask_stream(command) -> AsyncIterator[str]:
+        # 메타데이터 이벤트만 전달되고 실제 답변 토큰은 전혀 전달되지 않음
+        yield f"__SOURCES:{json.dumps([])}"
+        yield f"__CONFIDENCE:{json.dumps({'confidence': 0.5, 'missing': []})}"
+
+    ask_mock.execute.side_effect = fake_ask_stream
+
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+    message = AskRequestedMessage(
+        job_id="job-ragas-empty-tokens",
+        user_id="user-1",
+        question="빈 답변 테스트",
+    )
+
+    await consumer._process(message)
+
+    ragas_mock.evaluate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_handles_none_ragas_service_gracefully() -> None:
+    # ragas_eval_service가 주입되지 않은(None) 상태
+    composition, ask_mock = _make_composition(ragas_eval_service=None)
+
+    async def fake_ask_stream(command) -> AsyncIterator[str]:
+        yield "정상적인 답변 토큰입니다."
+
+    ask_mock.execute.side_effect = fake_ask_stream
+
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+    message = AskRequestedMessage(
+        job_id="job-ragas-service-none",
+        user_id="user-1",
+        question="서비스 None 테스트",
+    )
+
+    # 예외 없이 정상 종료되어야 함
+    await consumer._process(message)
+
+    done_calls = [
+        call
+        for call in redis_mock.xadd.await_args_list
+        if call.args[1].get("type") == "done"
+    ]
+    assert len(done_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_triggers_ragas_empty_contexts_when_no_sources(
+) -> None:
+    ragas_mock = MagicMock(spec=RagasEvalService)
+    ragas_mock.evaluate = AsyncMock()
+
+    composition, ask_mock = _make_composition(ragas_eval_service=ragas_mock)
+
+    async def fake_ask_stream(command) -> AsyncIterator[str]:
+        # sources 스트림 없이 답변만 생성된 경우
+        yield "컨텍스트 없는 답변입니다."
+
+    ask_mock.execute.side_effect = fake_ask_stream
+
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.xadd = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+    message = AskRequestedMessage(
+        job_id="job-ragas-no-sources",
+        user_id="user-1",
+        question="소스 없는 질문",
+    )
+
+    await consumer._process(message)
+
+    ragas_mock.evaluate.assert_awaited_once()
+    payload: RagasEvalPayload = ragas_mock.evaluate.await_args[0][0]
+    assert payload.trace_id == "job-ragas-no-sources"
+    assert payload.question == "소스 없는 질문"
+    assert payload.answer == "컨텍스트 없는 답변입니다."
+    assert payload.contexts == []
+
