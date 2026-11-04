@@ -8,6 +8,7 @@ from aiokafka import AIOKafkaConsumer
 from redis.asyncio import Redis
 
 from ai_service.core.events import JobEventPublisher
+from ai_service.observability.schemas import RagasEvalPayload
 from ai_service.rag.application.ask_command import AskCommand
 from ai_service.rag.application.command.agentic_ask_command import AgenticAskCommand
 from ai_service.rag.rag_composition import RagComposition
@@ -232,6 +233,30 @@ class AskRequestedConsumer:
                 done_data["refinedQueries"] = last_refined_queries
 
         await self._publisher.publish_done(message.job_id, done_data)
+
+        if not was_cancelled and collected and composition.ragas_eval_service is not None:
+            try:
+                context_texts = [
+                    s["snippet"]
+                    for s in (sources or [])
+                    if isinstance(s, dict) and s.get("snippet")
+                ]
+                full_response = "".join(collected)
+                await composition.ragas_eval_service.evaluate(
+                    RagasEvalPayload(
+                        trace_id=message.job_id,
+                        question=message.question,
+                        answer=full_response,
+                        contexts=context_texts,
+                    )
+                )
+            except Exception as e:
+                logger.warning(
+                    "RAGAS 평가 실행 실패 (jobId=%s): %s",
+                    message.job_id,
+                    e,
+                    exc_info=True,
+                )
 
     async def _resolve_session(self, message: AskRequestedMessage) -> ConversationSession | None:
         session_repo = self._composition.session_repo

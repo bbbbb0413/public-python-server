@@ -37,3 +37,32 @@ async def test_get_evals_returns_camel_case_payload() -> None:
     body = response.json()
     assert body["data"][0]["traceId"] == "t1"
     assert body["data"][0]["answerRelevancy"] == 0.6
+    assert body["data"][0]["answer"] == ""
+    assert body["data"][0]["contexts"] == []
+
+
+async def test_get_evals_includes_answer_and_contexts() -> None:
+    repo = FakeRagasEvaluationRepository()
+    repo.saved.append(
+        RagasEvaluation(
+            trace_id="t2",
+            question="지식 질문",
+            faithfulness=0.8,
+            answer_relevancy=0.9,
+            context_precision=0.7,
+            sampled_at=datetime(2026, 1, 2, tzinfo=UTC),
+            answer="상세 답변",
+            contexts=["컨텍스트 1", "컨텍스트 2"],
+        )
+    )
+    app.dependency_overrides[get_ragas_evaluation_repository] = lambda: repo
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/observability/ragas-evals")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"][0]["traceId"] == "t2"
+    assert body["data"][0]["answer"] == "상세 답변"
+    assert body["data"][0]["contexts"] == ["컨텍스트 1", "컨텍스트 2"]

@@ -20,6 +20,8 @@ class RagasEvaluationRepository:
                 "answerRelevancy": evaluation.answer_relevancy,
                 "contextPrecision": evaluation.context_precision,
                 "sampledAt": evaluation.sampled_at,
+                "answer": evaluation.answer,
+                "contexts": evaluation.contexts,
             }
         )
 
@@ -34,6 +36,8 @@ class RagasEvaluationRepository:
                 answer_relevancy=r["answerRelevancy"],
                 context_precision=r["contextPrecision"],
                 sampled_at=r["sampledAt"],
+                answer=r.get("answer") or "",
+                contexts=r.get("contexts") or [],
             )
             for r in records
         ]

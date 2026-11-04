@@ -19,6 +19,8 @@ from ai_service.llm_gateway.application.llm_routing_service import LlmRoutingSer
 from ai_service.llm_gateway.circuit_breaker import CircuitBreakerAdapter
 from ai_service.llm_gateway.infrastructure.providers.factory import build_llm_provider
 from ai_service.llm_gateway.repository import LlmCostLogRepository
+from ai_service.observability.repository import RagasEvaluationRepository
+from ai_service.observability.service import RagasEvalService
 from ai_service.prompt.repository import PromptTemplateRepository
 from ai_service.prompt.service import PromptService
 from ai_service.rag.application.agentic_ask_use_case import AgenticAskUseCase
@@ -70,6 +72,7 @@ class RagComposition:
     confidence_threshold: float
     hyde_max_query_words: int
     guardrail_enabled: bool
+    ragas_eval_service: RagasEvalService | None = None
 
 
 async def build_rag_composition(
@@ -176,6 +179,9 @@ async def build_rag_composition(
         settings.agentic_timeout_ms,
     )
 
+    ragas_repo = RagasEvaluationRepository(mongo_db)
+    ragas_eval_service = RagasEvalService(ragas_repo, settings)
+
     return RagComposition(
         ask_use_case=ask_use_case,
         agentic_ask_use_case=agentic_ask_use_case,
@@ -190,4 +196,5 @@ async def build_rag_composition(
         confidence_threshold=settings.agentic_confidence_threshold,
         hyde_max_query_words=settings.hyde_max_query_words,
         guardrail_enabled=settings.guardrail_enabled,
+        ragas_eval_service=ragas_eval_service,
     )
