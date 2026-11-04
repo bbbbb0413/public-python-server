@@ -221,6 +221,19 @@ class AskRequestedConsumer:
             )
             await composition.session_repo.update(updated)
 
+        done_data: dict[str, Any] | None = None
+        if last_confidence is not None and last_missing is not None:
+            done_data = {
+                "confidence": last_confidence,
+                "missing": last_missing,
+            }
+            if last_iteration is not None:
+                done_data["iterations"] = last_iteration
+            if last_refined_queries is not None:
+                done_data["refinedQueries"] = last_refined_queries
+
+        await self._publisher.publish_done(message.job_id, done_data)
+
         if not was_cancelled and collected and composition.ragas_eval_service is not None:
             try:
                 context_texts = [
@@ -244,19 +257,6 @@ class AskRequestedConsumer:
                     e,
                     exc_info=True,
                 )
-
-        done_data: dict[str, Any] | None = None
-        if last_confidence is not None and last_missing is not None:
-            done_data = {
-                "confidence": last_confidence,
-                "missing": last_missing,
-            }
-            if last_iteration is not None:
-                done_data["iterations"] = last_iteration
-            if last_refined_queries is not None:
-                done_data["refinedQueries"] = last_refined_queries
-
-        await self._publisher.publish_done(message.job_id, done_data)
 
     async def _resolve_session(self, message: AskRequestedMessage) -> ConversationSession | None:
         session_repo = self._composition.session_repo

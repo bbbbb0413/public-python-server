@@ -1,5 +1,7 @@
+import asyncio
 import json
 from collections.abc import AsyncIterator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -154,9 +156,7 @@ async def test_ask_requested_consumer_isolates_ragas_eval_exception() -> None:
     ragas_mock.evaluate.assert_awaited_once()
     # done 이벤트가 정상 발행되었는지 확인
     done_calls = [
-        call
-        for call in redis_mock.xadd.await_args_list
-        if call.args[1].get("type") == "done"
+        call for call in redis_mock.xadd.await_args_list if call.args[1].get("type") == "done"
     ]
     assert len(done_calls) == 1
 
@@ -216,16 +216,13 @@ async def test_ask_requested_consumer_handles_none_ragas_service_gracefully() ->
     await consumer._process(message)
 
     done_calls = [
-        call
-        for call in redis_mock.xadd.await_args_list
-        if call.args[1].get("type") == "done"
+        call for call in redis_mock.xadd.await_args_list if call.args[1].get("type") == "done"
     ]
     assert len(done_calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_ask_requested_consumer_triggers_ragas_empty_contexts_when_no_sources(
-) -> None:
+async def test_ask_requested_consumer_triggers_ragas_empty_contexts_when_no_sources() -> None:
     ragas_mock = MagicMock(spec=RagasEvalService)
     ragas_mock.evaluate = AsyncMock()
 
@@ -257,3 +254,54 @@ async def test_ask_requested_consumer_triggers_ragas_empty_contexts_when_no_sour
     assert payload.answer == "컨텍스트 없는 답변입니다."
     assert payload.contexts == []
 
+
+@pytest.mark.asyncio
+async def test_ask_requested_consumer_publishes_done_before_eval_finishes() -> None:
+    done_published = asyncio.Event()
+    eval_started = asyncio.Event()
+    finish_eval = asyncio.Event()
+
+    redis_mock = MagicMock(spec=Redis)
+    redis_mock.get = AsyncMock(return_value=None)
+
+    async def fake_xadd(name: str, fields: dict[str, Any]) -> None:
+        if fields.get("type") == "done":
+            done_published.set()
+
+    redis_mock.xadd = AsyncMock(side_effect=fake_xadd)
+
+    async def blocking_evaluate(payload: RagasEvalPayload) -> None:
+        eval_started.set()
+        await finish_eval.wait()
+
+    ragas_mock = MagicMock(spec=RagasEvalService)
+    ragas_mock.evaluate = AsyncMock(side_effect=blocking_evaluate)
+
+    composition, ask_mock = _make_composition(ragas_eval_service=ragas_mock)
+
+    async def fake_ask_stream(command: Any) -> AsyncIterator[str]:
+        yield "답변입니다."
+
+    ask_mock.execute.side_effect = fake_ask_stream
+
+    consumer = AskRequestedConsumer("localhost:9092", redis_mock, composition)
+    message = AskRequestedMessage(
+        job_id="job-ragas-order",
+        user_id="user-1",
+        question="평가 순서 테스트",
+    )
+
+    process_task = asyncio.create_task(consumer._process(message))
+
+    try:
+        # evaluate가 시작될 때까지 대기
+        await asyncio.wait_for(eval_started.wait(), timeout=2.0)
+
+        # evaluate가 아직 끝나지 않았지만 done 이벤트는 이미 발행되어 있어야 함
+        assert (
+            done_published.is_set()
+        ), "evaluate가 끝나기 전에 done 이벤트가 이미 발행되어 있어야 합니다."
+    finally:
+        # 테스트 정리: evaluate를 진행시켜 process_task가 정상 종료되도록 함
+        finish_eval.set()
+        await process_task
