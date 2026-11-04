@@ -68,3 +68,24 @@ async def test_llm_eval_failure_falls_back_to_heuristic() -> None:
     )
 
     assert len(repo.saved) == 1
+
+
+async def test_evaluate_preserves_answer_and_contexts() -> None:
+    repo = FakeRagasEvaluationRepository()
+    service = RagasEvalService(repo, _settings())
+
+    await service.evaluate(
+        RagasEvalPayload(
+            trace_id="trace-preserved",
+            question="지식베이스 질문",
+            answer="생성된 답변 본문",
+            contexts=["컨텍스트 1", "컨텍스트 2"],
+        )
+    )
+
+    assert len(repo.saved) == 1
+    saved = repo.saved[0]
+    assert saved.trace_id == "trace-preserved"
+    assert saved.question == "지식베이스 질문"
+    assert saved.answer == "생성된 답변 본문"
+    assert saved.contexts == ["컨텍스트 1", "컨텍스트 2"]

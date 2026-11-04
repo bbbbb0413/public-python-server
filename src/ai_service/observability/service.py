@@ -86,6 +86,8 @@ class RagasEvalService:
                 answer_relevancy=scores.answer_relevancy,
                 context_precision=scores.context_precision,
                 sampled_at=datetime.now(UTC),
+                answer=payload.answer,
+                contexts=payload.contexts,
             )
         )
 
