@@ -180,4 +180,43 @@ async def test_ingest_document_use_case_retry_failure_marks_document_failed(mock
     mock_dependencies["doc_repo"].update.assert_awaited()
     last_update_arg = mock_dependencies["doc_repo"].update.await_args[0][0]
     assert last_update_arg.status == "failed"
+    assert last_update_arg.error_message == "Vector DB connection error"
+
+
+@pytest.mark.asyncio
+async def test_ingest_document_use_case_empty_exception_message_falls_back(mock_dependencies):
+    existing_doc = Document(
+        id="doc-failed-empty-err",
+        file_name="test.txt",
+        mime_type="text/plain",
+        chunk_count=0,
+        status="pending",
+        created_at=datetime.now(UTC),
+    )
+    mock_dependencies["doc_repo"].find_by_id = AsyncMock(return_value=existing_doc)
+    mock_dependencies["vector_store"].upsert = AsyncMock(side_effect=RuntimeError("   "))
+
+    use_case = IngestDocumentUseCase(
+        document_repo=mock_dependencies["doc_repo"],
+        vector_store=mock_dependencies["vector_store"],
+        embedding_provider=mock_dependencies["embedding_provider"],
+        llm_provider=mock_dependencies["llm_provider"],
+        rag_validator=mock_dependencies["rag_validator"],
+        contextual_embeddings_enabled=False,
+    )
+
+    command = IngestDocumentCommand(
+        document_id="doc-failed-empty-err",
+        file_name="test.txt",
+        mime_type="text/plain",
+        content=b"Sample document content.",
+    )
+
+    with pytest.raises(RuntimeError):
+        await use_case.execute(command)
+
+    mock_dependencies["doc_repo"].update.assert_awaited()
+    last_update_arg = mock_dependencies["doc_repo"].update.await_args[0][0]
+    assert last_update_arg.status == "failed"
+    assert last_update_arg.error_message == "문서 인제스트 처리 중 오류가 발생했습니다."
 

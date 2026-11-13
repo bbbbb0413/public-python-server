@@ -81,6 +81,7 @@ class DocumentRepository:
             "status": document.status,
             "chunkCount": document.chunk_count,
             "createdAt": document.created_at,
+            "errorMessage": document.error_message,
         }
         result = await self._collection.insert_one(record)
         return self._to_domain({**record, "_id": result.inserted_id})
@@ -99,7 +100,13 @@ class DocumentRepository:
     async def update(self, document: Document) -> Document:
         await self._collection.update_one(
             {"_id": ObjectId(document.id)},
-            {"$set": {"status": document.status, "chunkCount": document.chunk_count}},
+            {
+                "$set": {
+                    "status": document.status,
+                    "chunkCount": document.chunk_count,
+                    "errorMessage": document.error_message,
+                }
+            },
         )
         return document
 
@@ -117,6 +124,7 @@ class DocumentRepository:
                 status=record["status"],
                 chunk_count=record["chunkCount"],
                 created_at=record.get("createdAt") or datetime.now(UTC),
+                error_message=record.get("errorMessage"),
             )
         )
 

@@ -1,9 +1,12 @@
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from bson import ObjectId
 from gridfs.errors import NoFile
 
 from ai_service.knowledge.repository import DocumentRepository
+from ai_service.knowledge.schemas import Document
 
 
 def _make_repo() -> tuple[DocumentRepository, MagicMock]:
@@ -121,3 +124,70 @@ async def test_find_by_id_returns_none_when_invalid_object_id() -> None:
 
     assert result is None
     repo._collection.find_one.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_persist_saves_error_message():
+    repo, _ = _make_repo()
+    inserted_id = ObjectId()
+    repo._collection.insert_one = AsyncMock(return_value=MagicMock(inserted_id=inserted_id))
+
+    doc = Document.create("sample.txt", "text/plain").mark_failed("인제스트 실패")
+    result = await repo.persist(doc)
+
+    repo._collection.insert_one.assert_awaited_once()
+    saved_record = repo._collection.insert_one.await_args[0][0]
+    assert saved_record["errorMessage"] == "인제스트 실패"
+    assert result.error_message == "인제스트 실패"
+
+
+@pytest.mark.asyncio
+async def test_update_updates_error_message():
+    repo, _ = _make_repo()
+    doc_id = str(ObjectId())
+    repo._collection.update_one = AsyncMock()
+
+    doc = Document(
+        id=doc_id,
+        file_name="sample.txt",
+        mime_type="text/plain",
+        status="failed",
+        chunk_count=0,
+        created_at=datetime.now(UTC),
+        error_message="Qdrant 연결 시간 초과",
+    )
+    result = await repo.update(doc)
+
+    assert result == doc
+    repo._collection.update_one.assert_awaited_once_with(
+        {"_id": ObjectId(doc_id)},
+        {"$set": {"status": "failed", "chunkCount": 0, "errorMessage": "Qdrant 연결 시간 초과"}},
+    )
+
+
+def test_to_domain_maps_error_message_and_falls_back():
+    obj_id = ObjectId()
+    # 1. errorMessage 필드가 있는 경우
+    record_with_error = {
+        "_id": obj_id,
+        "fileName": "a.txt",
+        "mimeType": "text/plain",
+        "status": "failed",
+        "chunkCount": 0,
+        "createdAt": datetime.now(UTC),
+        "errorMessage": "파일 손상",
+    }
+    doc1 = DocumentRepository._to_domain(record_with_error)
+    assert doc1.error_message == "파일 손상"
+
+    # 2. 레거시 데이터(errorMessage 필드 누락)
+    legacy_record = {
+        "_id": obj_id,
+        "fileName": "b.txt",
+        "mimeType": "text/plain",
+        "status": "failed",
+        "chunkCount": 0,
+        "createdAt": datetime.now(UTC),
+    }
+    doc2 = DocumentRepository._to_domain(legacy_record)
+    assert doc2.error_message is None

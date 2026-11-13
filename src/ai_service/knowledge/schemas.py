@@ -15,6 +15,7 @@ class DocumentProps:
     chunk_count: int
     id: str | None = None
     created_at: datetime | None = None
+    error_message: str | None = None
 
 
 class Document:
@@ -26,6 +27,7 @@ class Document:
         status: DocumentStatus,
         chunk_count: int,
         created_at: datetime,
+        error_message: str | None = None,
     ) -> None:
         self.id = id
         self.file_name = file_name
@@ -33,6 +35,7 @@ class Document:
         self.status = status
         self.chunk_count = chunk_count
         self.created_at = created_at
+        self.error_message = error_message
 
     @classmethod
     def create(cls, file_name: str, mime_type: str) -> "Document":
@@ -43,6 +46,7 @@ class Document:
             status="pending",
             chunk_count=0,
             created_at=datetime.now(UTC),
+            error_message=None,
         )
 
     @classmethod
@@ -54,6 +58,7 @@ class Document:
             status=props.status,
             chunk_count=props.chunk_count,
             created_at=props.created_at or datetime.now(UTC),
+            error_message=props.error_message,
         )
 
     def mark_processed(self, chunk_count: int) -> "Document":
@@ -65,10 +70,11 @@ class Document:
                 status="processed",
                 chunk_count=chunk_count,
                 created_at=self.created_at,
+                error_message=None,
             )
         )
 
-    def mark_failed(self) -> "Document":
+    def mark_failed(self, error_message: str | None = None) -> "Document":
         return Document.restore(
             DocumentProps(
                 id=self.id,
@@ -77,6 +83,7 @@ class Document:
                 status="failed",
                 chunk_count=0,
                 created_at=self.created_at,
+                error_message=error_message,
             )
         )
 
@@ -158,6 +165,7 @@ class DocumentOut(BaseModel):
     status: str
     chunk_count: int = Field(alias="chunkCount")
     created_at: datetime = Field(alias="createdAt")
+    error_message: str | None = Field(default=None, alias="errorMessage")
 
     @classmethod
     def from_domain(cls, doc: Document) -> "DocumentOut":
@@ -168,6 +176,7 @@ class DocumentOut(BaseModel):
             status=doc.status,
             chunkCount=doc.chunk_count,
             createdAt=doc.created_at,
+            errorMessage=doc.error_message,
         )
 
 

@@ -208,3 +208,38 @@ async def test_retry_document_ingest_auth_with_admin_key() -> None:
             headers={"x-admin-key": "secret-key"},
         )
         assert res_valid_key.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_list_and_get_documents_includes_error_message() -> None:
+    repo_mock = MagicMock(spec=DocumentRepository)
+    failed_doc = Document(
+        id="doc-failed-1",
+        file_name="bad.pdf",
+        mime_type="application/pdf",
+        status="failed",
+        chunk_count=0,
+        created_at=datetime.now(UTC),
+        error_message="인제스트 차단: 시스템 프롬프트 유출 시도",
+    )
+    repo_mock.find_all = AsyncMock(return_value=[failed_doc])
+    repo_mock.find_by_id = AsyncMock(return_value=failed_doc)
+
+    app.dependency_overrides[get_document_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # GET /knowledge/documents
+        list_res = await client.get("/knowledge/documents")
+        assert list_res.status_code == 200
+        items = list_res.json()
+        assert len(items) == 1
+        assert items[0]["id"] == "doc-failed-1"
+        assert items[0]["errorMessage"] == "인제스트 차단: 시스템 프롬프트 유출 시도"
+
+        # GET /knowledge/documents/{id}
+        get_res = await client.get("/knowledge/documents/doc-failed-1")
+        assert get_res.status_code == 200
+        data = get_res.json()
+        assert data["id"] == "doc-failed-1"
+        assert data["errorMessage"] == "인제스트 차단: 시스템 프롬프트 유출 시도"
