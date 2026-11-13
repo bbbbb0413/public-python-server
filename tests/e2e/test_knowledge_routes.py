@@ -243,3 +243,87 @@ async def test_list_and_get_documents_includes_error_message() -> None:
         data = get_res.json()
         assert data["id"] == "doc-failed-1"
         assert data["errorMessage"] == "인제스트 차단: 시스템 프롬프트 유출 시도"
+
+
+@pytest.mark.asyncio
+async def test_retry_document_ingest_success_clears_error_message_and_updates_status() -> None:
+    repo_mock = MagicMock(spec=DocumentRepository)
+    failed_doc = Document(
+        id="doc-retry-success",
+        file_name="sample.txt",
+        mime_type="text/plain",
+        status="failed",
+        chunk_count=0,
+        created_at=datetime.now(UTC),
+        error_message="임베딩 생성 타임아웃",
+    )
+    processed_doc = failed_doc.mark_processed(3)
+
+    repo_mock.find_by_id = AsyncMock(return_value=failed_doc)
+    repo_mock.get_original_file = AsyncMock(
+        return_value=(b"sample content", "sample.txt", "text/plain")
+    )
+    repo_mock.find_all = AsyncMock(return_value=[processed_doc])
+
+    use_case_mock = MagicMock(spec=IngestDocumentUseCase)
+    use_case_mock.execute = AsyncMock(return_value=processed_doc)
+
+    app.dependency_overrides[get_document_repository] = lambda: repo_mock
+    app.dependency_overrides[get_ingest_use_case] = lambda: use_case_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # POST /knowledge/documents/{id}/retry
+        retry_res = await client.post("/knowledge/documents/doc-retry-success/retry")
+        assert retry_res.status_code == 200
+        retry_data = retry_res.json()
+        assert retry_data["id"] == "doc-retry-success"
+        assert retry_data["status"] == "processed"
+        assert retry_data["chunkCount"] == 3
+        assert retry_data["errorMessage"] is None
+
+        # GET /knowledge/documents
+        list_res = await client.get("/knowledge/documents")
+        assert list_res.status_code == 200
+        items = list_res.json()
+        assert len(items) == 1
+        assert items[0]["id"] == "doc-retry-success"
+        assert items[0]["status"] == "processed"
+        assert items[0]["errorMessage"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_and_get_legacy_failed_documents_without_error_message() -> None:
+    repo_mock = MagicMock(spec=DocumentRepository)
+    legacy_failed_doc = Document(
+        id="doc-legacy-1",
+        file_name="legacy.txt",
+        mime_type="text/plain",
+        status="failed",
+        chunk_count=0,
+        created_at=datetime.now(UTC),
+        error_message=None,
+    )
+    repo_mock.find_all = AsyncMock(return_value=[legacy_failed_doc])
+    repo_mock.find_by_id = AsyncMock(return_value=legacy_failed_doc)
+
+    app.dependency_overrides[get_document_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # GET /knowledge/documents
+        list_res = await client.get("/knowledge/documents")
+        assert list_res.status_code == 200
+        items = list_res.json()
+        assert len(items) == 1
+        assert items[0]["id"] == "doc-legacy-1"
+        assert items[0]["status"] == "failed"
+        assert items[0]["errorMessage"] is None
+
+        # GET /knowledge/documents/{id}
+        get_res = await client.get("/knowledge/documents/doc-legacy-1")
+        assert get_res.status_code == 200
+        data = get_res.json()
+        assert data["id"] == "doc-legacy-1"
+        assert data["status"] == "failed"
+        assert data["errorMessage"] is None
