@@ -125,9 +125,10 @@ class IngestDocumentUseCase:
 
             processed = document.mark_processed(len(vector_docs))
             return await self._document_repo.update(processed)
-        except Exception:
+        except Exception as exc:
             logger.exception("문서 수집 실패: %s", command.file_name)
-            failed = document.mark_failed()
+            error_message = str(exc).strip() or "문서 인제스트 처리 중 오류가 발생했습니다."
+            failed = document.mark_failed(error_message)
             await self._document_repo.update(failed)
             raise
 
