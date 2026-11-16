@@ -153,7 +153,7 @@ class CritiqueGeneratorService:
     def _fallback_critique() -> Critique:
         return Critique.of(
             answered=False,
-            missing=["비평 파싱 실패"],
+            missing=[],
             next_query="",
             confidence=0.0,
         )

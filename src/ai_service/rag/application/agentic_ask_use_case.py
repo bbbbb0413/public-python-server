@@ -185,10 +185,10 @@ class AgenticAskUseCase:
                 if iteration == 1:
                     if chunks:
                         last_confidence = max(c.score for c in chunks)
-                        last_missing = ["답변 검증 예산 소진으로 상세 비평 생략"]
+                        last_missing = []
                     else:
                         last_confidence = 0.0
-                        last_missing = ["관련 지식베이스 문서를 찾지 못함"]
+                        last_missing = []
                 await self._emit_progress(
                     callback,
                     iteration,
