@@ -80,7 +80,7 @@ async def test_critique_generator_fallback_on_invalid_json():
 
     assert critique.is_satisfied(0.1) is False
     assert critique.get_confidence() == 0.0
-    assert critique.get_missing() == ["비평 파싱 실패"]
+    assert critique.get_missing() == []
     assert critique.get_next_query() == ""
 
 
@@ -92,7 +92,7 @@ async def test_critique_generator_fallback_on_empty_string():
 
     assert critique.is_satisfied(0.1) is False
     assert critique.get_confidence() == 0.0
-    assert critique.get_missing() == ["비평 파싱 실패"]
+    assert critique.get_missing() == []
     assert critique.get_next_query() == ""
 
 
@@ -105,7 +105,7 @@ async def test_critique_generator_fallback_on_broken_json():
 
     assert critique.is_satisfied(0.1) is False
     assert critique.get_confidence() == 0.0
-    assert critique.get_missing() == ["비평 파싱 실패"]
+    assert critique.get_missing() == []
     assert critique.get_next_query() == ""
 
 

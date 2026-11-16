@@ -304,5 +304,5 @@ async def test_ask_use_case_yields_zero_confidence_and_missing_when_no_chunks(
 
     confidence_meta = json.loads(results[0][len("__CONFIDENCE:") :])
     assert confidence_meta["confidence"] == 0.0
-    assert confidence_meta["missing"] == ["관련 지식베이스 문서를 찾지 못함"]
+    assert confidence_meta["missing"] == []
 

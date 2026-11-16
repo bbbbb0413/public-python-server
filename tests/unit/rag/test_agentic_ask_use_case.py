@@ -438,10 +438,10 @@ async def test_agentic_ask_fallback_critique_triggers_refining(
     rag_validator: RagContentValidator,
     secret_pii_scanner: SecretPiiScanner,
 ):
-    # 1회차: 파싱 실패 폴백 (answered=False, missing=["비평 파싱 실패"], confidence=0.0)
+    # 1회차: 파싱 실패 폴백 (answered=False, missing=[], confidence=0.0)
     # 2회차: 정상 비평 (answered=True, missing=[], confidence=0.9)
     mock_critique_generator.generate.side_effect = [
-        Critique.of(answered=False, missing=["비평 파싱 실패"], next_query="", confidence=0.0),
+        Critique.of(answered=False, missing=[], next_query="", confidence=0.0),
         Critique.of(answered=True, missing=[], next_query="", confidence=0.9),
     ]
 
@@ -1193,7 +1193,7 @@ async def test_agentic_ask_fallback_confidence_when_budget_exhausted_with_chunks
 ):
     # 수용 기준 2 검증:
     # 1회차 실행 중 청크 2건(0.85, 0.72)이 검색되었으나 예산 소진으로 조기 종료될 때
-    # confidence=0.85 (청크 최고점), missing=["답변 검증 예산 소진으로 상세 비평 생략"]
+    # confidence=0.85 (청크 최고점), missing=[]
     chunks = [
         SimilaritySearchResult(
             text="청크 내용 1",
@@ -1245,7 +1245,7 @@ async def test_agentic_ask_fallback_confidence_when_budget_exhausted_with_chunks
     assert final_event["iteration"] == 1
     assert final_event["phase"] == "generating"
     assert final_event["confidence"] == 0.85
-    assert final_event["missing"] == ["답변 검증 예산 소진으로 상세 비평 생략"]
+    assert final_event["missing"] == []
 
 
 @pytest.mark.asyncio
@@ -1259,7 +1259,7 @@ async def test_agentic_ask_fallback_confidence_when_budget_exhausted_with_no_chu
 ):
     # 수용 기준 3 검증:
     # 1회차에 검색된 청크가 0건(chunks=[])이고 예산 소진 시
-    # confidence=0.0, missing=["관련 지식베이스 문서를 찾지 못함"]
+    # confidence=0.0, missing=[]
     mock_hybrid_search = AsyncMock(spec=HybridSearchUseCase)
     mock_hybrid_search.execute.return_value = HybridSearchResult(
         chunks=[], query_embedding=[0.1, 0.2]
@@ -1294,7 +1294,7 @@ async def test_agentic_ask_fallback_confidence_when_budget_exhausted_with_no_chu
     assert final_event["iteration"] == 1
     assert final_event["phase"] == "generating"
     assert final_event["confidence"] == 0.0
-    assert final_event["missing"] == ["관련 지식베이스 문서를 찾지 못함"]
+    assert final_event["missing"] == []
 
 
 @pytest.mark.asyncio

@@ -106,7 +106,7 @@ class AskUseCase:
             yield f"__CONFIDENCE:{json.dumps({'confidence': confidence, 'missing': missing})}"
         else:
             confidence = 0.0
-            missing = ["관련 지식베이스 문서를 찾지 못함"]
+            missing = []
             meta_str = json.dumps(
                 {"confidence": confidence, "missing": missing}, ensure_ascii=False
             )

@@ -847,7 +847,7 @@ async def test_ask_requested_consumer_simple_persists_zero_confidence_when_no_ch
     redis_mock.xadd = AsyncMock()
     redis_mock.get = AsyncMock(return_value=None)
 
-    confidence_data = {"confidence": 0.0, "missing": ["관련 지식베이스 문서를 찾지 못함"]}
+    confidence_data = {"confidence": 0.0, "missing": []}
 
     ask_use_case_mock = MagicMock(spec=AskUseCase)
 
@@ -903,7 +903,7 @@ async def test_ask_requested_consumer_simple_persists_zero_confidence_when_no_ch
     assert updated_session.turns[1].content == "근거 없는 답변입니다."
     assert updated_session.turns[1].sources is None
     assert updated_session.turns[1].confidence == 0.0
-    assert updated_session.turns[1].missing == ["관련 지식베이스 문서를 찾지 못함"]
+    assert updated_session.turns[1].missing == []
 
     # 2. done 이벤트에 0.0 confidence 메타데이터 포함 검증
     done_calls = [
@@ -914,7 +914,7 @@ async def test_ask_requested_consumer_simple_persists_zero_confidence_when_no_ch
     assert len(done_calls) == 1
     assert "data" in done_calls[0].args[1]
     done_data = json.loads(done_calls[0].args[1]["data"])
-    assert done_data == {"confidence": 0.0, "missing": ["관련 지식베이스 문서를 찾지 못함"]}
+    assert done_data == {"confidence": 0.0, "missing": []}
 
 
 async def test_ask_requested_consumer_agentic_cancelled_stops_streaming():
@@ -1211,7 +1211,7 @@ async def test_ask_requested_consumer_complex_passes_none_session_id_when_sessio
 async def test_ask_requested_consumer_complex_exhausted_budget_publishes_fallback():
     # 수용 기준 2 엔드투엔드(Consumer + AgenticAskUseCase) 검증:
     # 1회차 실행 중 지식 문서 청크 2건(0.85, 0.72) 검색 후 예산 소진으로 조기 종료 시
-    # confidence=0.85, missing=["답변 검증 예산 소진으로 상세 비평 생략"]이
+    # confidence=0.85, missing=[]이
     # progress 이벤트, done 이벤트, 세션 저장에 온전하게 반영되는지 확인
     from ai_service.knowledge.schemas import (
         SimilaritySearchResult,
@@ -1320,7 +1320,7 @@ async def test_ask_requested_consumer_complex_exhausted_budget_publishes_fallbac
     assert len(progress_calls) >= 2
     last_progress = json.loads(progress_calls[-1].args[1]["data"])
     assert last_progress["confidence"] == 0.85
-    assert last_progress["missing"] == ["답변 검증 예산 소진으로 상세 비평 생략"]
+    assert last_progress["missing"] == []
 
     # 2. done 이벤트 확인
     done_calls = [
@@ -1329,7 +1329,7 @@ async def test_ask_requested_consumer_complex_exhausted_budget_publishes_fallbac
     assert len(done_calls) == 1
     done_data = json.loads(done_calls[0].args[1]["data"])
     assert done_data["confidence"] == 0.85
-    assert done_data["missing"] == ["답변 검증 예산 소진으로 상세 비평 생략"]
+    assert done_data["missing"] == []
     assert done_data["iterations"] == 1
 
     # 3. session.append_turn 저장 확인
@@ -1337,7 +1337,7 @@ async def test_ask_requested_consumer_complex_exhausted_budget_publishes_fallbac
     updated_session: ConversationSession = session_repo_mock.update.await_args.args[0]
     last_turn = updated_session.turns[-1]
     assert last_turn.confidence == 0.85
-    assert last_turn.missing == ["답변 검증 예산 소진으로 상세 비평 생략"]
+    assert last_turn.missing == []
     assert last_turn.iterations == 1
 
 
@@ -1433,7 +1433,7 @@ async def test_ask_requested_consumer_complex_exhausted_budget_no_chunks_zero_co
     assert len(done_calls) == 1
     done_data = json.loads(done_calls[0].args[1]["data"])
     assert done_data["confidence"] == 0.0
-    assert done_data["missing"] == ["관련 지식베이스 문서를 찾지 못함"]
+    assert done_data["missing"] == []
     assert done_data["iterations"] == 1
 
 
