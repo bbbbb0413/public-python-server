@@ -835,6 +835,49 @@ async def test_get_sessions_spec_special_character_keywords(kw: str) -> None:
     repo_mock.find_by_user_id.assert_awaited_once_with("user-1", 1, 10, kw)
 
 
+async def test_get_session_with_legacy_system_status_missing_returns_payload_intact() -> None:
+    # SPEC-104 수용 기준 4 검증:
+    # 과거 세션 데이터의 missing에 시스템 상태 문자열
+    # ("관련 지식베이스 문서를 찾지 못함", "비평 파싱 실패")이 저장되어 있는 경우
+    # 백엔드는 스키마 에러 없이 온전하게 페이로드를 클라이언트로 전달해야 한다.
+    now = datetime.now(UTC)
+    props = RestoreProps(
+        session_id="session-legacy-missing-104",
+        user_id="user-1",
+        title="레거시 세션",
+        turns=[
+            TurnRecord(role="user", content="과거 질문", created_at=now),
+            TurnRecord(
+                role="assistant",
+                content="과거 답변입니다.",
+                created_at=now,
+                confidence=0.0,
+                missing=["관련 지식베이스 문서를 찾지 못함", "비평 파싱 실패"],
+                iterations=1,
+            ),
+        ],
+        created_at=now,
+        updated_at=now,
+    )
+    session = ConversationSession.restore(props)
+
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+    repo_mock.find_by_id_for_user = AsyncMock(return_value=session)
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/rag/sessions/session-legacy-missing-104?userId=user-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sessionId"] == "session-legacy-missing-104"
+    assert len(body["turns"]) == 2
+    assert body["turns"][1]["confidence"] == 0.0
+    assert body["turns"][1]["missing"] == ["관련 지식베이스 문서를 찾지 못함", "비평 파싱 실패"]
+
+
+
 
 
 
