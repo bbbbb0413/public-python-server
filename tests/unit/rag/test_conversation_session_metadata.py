@@ -434,5 +434,58 @@ def test_session_out_snippet_extraction():
     assert "$100" in out_dollar.snippet
 
 
+def test_session_detail_out_bookmark_field():
+    now = datetime.now(UTC)
+    session = ConversationSession.restore(
+        RestoreProps(
+            session_id="sess-detail-bm",
+            user_id="user-1",
+            title="북마크 세션",
+            turns=[
+                TurnRecord(role="user", content="질문", created_at=now),
+                TurnRecord(role="assistant", content="답변", created_at=now),
+            ],
+            created_at=now,
+            updated_at=now,
+            is_bookmarked=True,
+        )
+    )
+
+    detail_true = SessionDetailOut.from_domain(session)
+    assert detail_true.is_bookmarked is True
+    data_true = detail_true.model_dump(by_alias=True)
+    assert data_true["isBookmarked"] is True
+
+    session_unbookmarked = session.with_bookmark(False)
+    detail_false = SessionDetailOut.from_domain(session_unbookmarked)
+    assert detail_false.is_bookmarked is False
+    data_false = detail_false.model_dump(by_alias=True)
+    assert data_false["isBookmarked"] is False
+
+    # 필드 기본값(False) 검증 (isBookmarked 생략 시)
+    detail_default = SessionDetailOut(
+        sessionId="sess-default",
+        title="기본값 세션",
+        turns=[],
+        createdAt=now,
+        updatedAt=now,
+    )
+    assert detail_default.is_bookmarked is False
+    assert detail_default.model_dump(by_alias=True)["isBookmarked"] is False
+
+    # 레거시 데이터 직렬화/역직렬화 검증 (isBookmarked 누락된 딕셔너리)
+    legacy_dict = {
+        "sessionId": "sess-legacy",
+        "title": "레거시 세션",
+        "turns": [],
+        "createdAt": now.isoformat(),
+        "updatedAt": now.isoformat(),
+    }
+    detail_legacy = SessionDetailOut.model_validate(legacy_dict)
+    assert detail_legacy.is_bookmarked is False
+    assert detail_legacy.model_dump(by_alias=True)["isBookmarked"] is False
+
+
+
 
 
