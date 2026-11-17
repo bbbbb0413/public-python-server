@@ -877,6 +877,71 @@ async def test_get_session_with_legacy_system_status_missing_returns_payload_int
     assert body["turns"][1]["missing"] == ["관련 지식베이스 문서를 찾지 못함", "비평 파싱 실패"]
 
 
+async def test_get_session_detail_returns_is_bookmarked_field() -> None:
+    now = datetime.now(UTC)
+
+    # 1. 북마크된 세션
+    props_bookmarked = RestoreProps(
+        session_id="session-bm-true",
+        user_id="user-1",
+        title="북마크된 세션",
+        turns=[TurnRecord(role="user", content="질문", created_at=now)],
+        created_at=now,
+        updated_at=now,
+        is_bookmarked=True,
+    )
+    session_bm = ConversationSession.restore(props_bookmarked)
+
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+    repo_mock.find_by_id_for_user = AsyncMock(return_value=session_bm)
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/rag/sessions/session-bm-true?userId=user-1")
+
+    assert res.status_code == 200
+    assert res.json()["isBookmarked"] is True
+
+    # 2. 북마크되지 않은 세션
+    props_unbookmarked = RestoreProps(
+        session_id="session-bm-false",
+        user_id="user-1",
+        title="북마크 안 된 세션",
+        turns=[TurnRecord(role="user", content="질문", created_at=now)],
+        created_at=now,
+        updated_at=now,
+        is_bookmarked=False,
+    )
+    session_unbm = ConversationSession.restore(props_unbookmarked)
+    repo_mock.find_by_id_for_user = AsyncMock(return_value=session_unbm)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/rag/sessions/session-bm-false?userId=user-1")
+
+    assert res.status_code == 200
+    assert res.json()["isBookmarked"] is False
+
+    # 3. 레거시 세션 (isBookmarked 필드가 없던 문서)
+    legacy_record = {
+        "sessionId": "session-bm-legacy",
+        "userId": "user-1",
+        "title": "레거시 세션",
+        "turns": [{"role": "user", "content": "질문", "createdAt": now}],
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    session_legacy = ConversationSessionRepository._to_domain(legacy_record)
+    repo_mock.find_by_id_for_user = AsyncMock(return_value=session_legacy)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/rag/sessions/session-bm-legacy?userId=user-1")
+
+    assert res.status_code == 200
+    assert res.json()["isBookmarked"] is False
+
+
+
 
 
 

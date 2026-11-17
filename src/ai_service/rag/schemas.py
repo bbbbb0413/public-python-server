@@ -477,6 +477,7 @@ class SessionDetailOut(BaseModel):
 
     session_id: str = Field(alias="sessionId")
     title: str
+    is_bookmarked: bool = Field(default=False, alias="isBookmarked")
     turns: list[SessionTurnOut]
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
@@ -486,6 +487,7 @@ class SessionDetailOut(BaseModel):
         return cls(
             sessionId=session.get_session_id(),
             title=session.title,
+            isBookmarked=session.is_bookmarked,
             turns=[SessionTurnOut.from_domain(t) for t in session.turns],
             createdAt=session.created_at,
             updatedAt=session.updated_at,
