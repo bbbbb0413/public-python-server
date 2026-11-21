@@ -113,6 +113,18 @@ class BookmarkService:
         )
         return [BookmarkItemOut.from_dict(r) for r in records]
 
+    async def get_session_bookmarks(
+        self, user_id: str, session_id: str
+    ) -> list[BookmarkItemOut]:
+        session = await self._session_repo.find_by_id_for_user(session_id, user_id)
+        if session is None:
+            raise SessionNotFoundError(session_id)
+        records = await self._bookmark_repo.find_by_session_and_user(
+            session_id, user_id
+        )
+        return [BookmarkItemOut.from_dict(r) for r in records]
+
+
     async def delete_bookmark(self, bookmark_id: str, user_id: str) -> None:
         deleted = await self._bookmark_repo.delete_by_id_for_user(
             bookmark_id, user_id

@@ -148,6 +148,24 @@ async def get_bookmarks(
     return await service.list_bookmarks(user_id, page, limit, effective_query)
 
 
+@bookmarks_router.get(
+    "/session/{session_id}",
+    response_model=list[BookmarkItemOut],
+    response_model_by_alias=True,
+)
+async def get_session_bookmarks(
+    session_id: str,
+    service: BookmarkServiceDep,
+    user_id: str = Query(alias="userId"),
+) -> list[BookmarkItemOut]:
+    """특정 세션의 답변 북마크 목록 조회."""
+    try:
+        return await service.get_session_bookmarks(user_id, session_id)
+    except SessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=NOT_FOUND_DETAIL) from exc
+
+
+
 @bookmarks_router.post(
     "",
     response_model=BookmarkItemOut,

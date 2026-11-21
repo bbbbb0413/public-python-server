@@ -1,4 +1,5 @@
 import re
+from datetime import UTC, datetime
 from typing import Any
 
 from bson import ObjectId
@@ -174,9 +175,50 @@ class BookmarkRepository:
         )
 
     async def create(self, bookmark_dict: dict[str, Any]) -> str:
+        turn_index = bookmark_dict.get("turnIndex")
+        if (
+            turn_index is not None
+            and "sessionId" in bookmark_dict
+            and "userId" in bookmark_dict
+        ):
+            filter_key = {
+                "sessionId": bookmark_dict["sessionId"],
+                "userId": bookmark_dict["userId"],
+                "turnIndex": turn_index,
+            }
+            existing = await self._collection.find_one(filter_key)
+            if existing is not None:
+                now = datetime.now(UTC)
+                update_fields = {
+                    "note": bookmark_dict.get("note"),
+                    "content": bookmark_dict.get("content"),
+                    "title": bookmark_dict.get("title"),
+                    "updatedAt": bookmark_dict.get("updatedAt", now),
+                }
+                await self._collection.update_one(
+                    {"_id": existing["_id"]},
+                    {"$set": update_fields},
+                )
+                return str(existing["_id"])
+
         doc = dict(bookmark_dict)
         result = await self._collection.insert_one(doc)
         return str(result.inserted_id)
+
+    async def find_by_session_and_user(
+        self, session_id: str, user_id: str
+    ) -> list[dict[str, Any]]:
+        cursor = self._collection.find(
+            {"sessionId": session_id, "userId": user_id, "turnIndex": {"$ne": None}}
+        ).sort("turnIndex", 1)
+        items: list[dict[str, Any]] = []
+        async for record in cursor:
+            record_copy = dict(record)
+            if "_id" in record_copy:
+                record_copy["id"] = str(record_copy.pop("_id"))
+            items.append(record_copy)
+        return items
+
 
     async def find_by_user_id(
         self, user_id: str, page: int, limit: int, query: str | None = None

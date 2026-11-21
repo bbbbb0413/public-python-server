@@ -235,3 +235,56 @@ async def test_delete_bookmark_missing_user_id_fails_validation() -> None:
 
     assert response.status_code == 422
 
+
+async def test_get_session_bookmarks_success() -> None:
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id_for_user = AsyncMock(return_value=_create_sample_session())
+    app.dependency_overrides[get_conversation_session_repository] = lambda: session_repo_mock
+
+    now = datetime.now(UTC)
+    bookmark_repo_mock = MagicMock(spec=BookmarkRepository)
+    bookmark_repo_mock.find_by_session_and_user = AsyncMock(
+        return_value=[
+            {
+                "id": "bm-sess-1",
+                "sessionId": "sess-1",
+                "turnIndex": 1,
+                "title": "파이프라인 질의",
+                "content": "RAG 검색 결과입니다.",
+                "note": "세션 내 보관",
+                "createdAt": now,
+            }
+        ]
+    )
+    app.dependency_overrides[get_bookmark_repository] = lambda: bookmark_repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/rag/bookmarks/session/sess-1?userId=user-1")
+
+    assert response.status_code == 200
+    items = response.json()
+    assert len(items) == 1
+    assert items[0]["id"] == "bm-sess-1"
+    assert items[0]["sessionId"] == "sess-1"
+    assert items[0]["turnIndex"] == 1
+    assert items[0]["note"] == "세션 내 보관"
+
+
+async def test_get_session_bookmarks_session_not_found_returns_404() -> None:
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id_for_user = AsyncMock(return_value=None)
+    app.dependency_overrides[get_conversation_session_repository] = lambda: session_repo_mock
+
+    bookmark_repo_mock = MagicMock(spec=BookmarkRepository)
+    app.dependency_overrides[get_bookmark_repository] = lambda: bookmark_repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/rag/bookmarks/session/sess-unknown?userId=user-1")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "대화 세션을 찾을 수 없습니다."
+
+
+

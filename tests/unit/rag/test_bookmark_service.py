@@ -10,7 +10,11 @@ from ai_service.rag.schemas import (
     RestoreProps,
     TurnRecord,
 )
-from ai_service.rag.service import BookmarkNotFoundError, BookmarkService
+from ai_service.rag.service import (
+    BookmarkNotFoundError,
+    BookmarkService,
+    SessionNotFoundError,
+)
 
 
 def _create_sample_session(
@@ -160,4 +164,55 @@ async def test_create_bookmark_with_negative_or_out_of_range_turn_index() -> Non
     res_pos = await service.create_bookmark(user_id="user-1", dto=dto_pos)
     assert res_pos.turn_index == 100
     assert res_pos.content is None
+
+
+@pytest.mark.asyncio
+async def test_get_session_bookmarks_success() -> None:
+    session_repo = MagicMock(spec=ConversationSessionRepository)
+    session_repo.find_by_id_for_user = AsyncMock(return_value=_create_sample_session())
+
+    bookmark_repo = MagicMock(spec=BookmarkRepository)
+    now = datetime.now(UTC)
+    bookmark_repo.find_by_session_and_user = AsyncMock(
+        return_value=[
+            {
+                "id": "bm-1",
+                "sessionId": "sess-1",
+                "turnIndex": 1,
+                "title": "세션 제목: 파이프라인 가이드",
+                "content": "RAG 검색 결과입니다.",
+                "note": "중요 메모",
+                "createdAt": now,
+            }
+        ]
+    )
+
+    service = BookmarkService(bookmark_repo=bookmark_repo, session_repo=session_repo)
+    items = await service.get_session_bookmarks(user_id="user-1", session_id="sess-1")
+
+    assert len(items) == 1
+    assert items[0].id == "bm-1"
+    assert items[0].session_id == "sess-1"
+    assert items[0].turn_index == 1
+    assert items[0].note == "중요 메모"
+    session_repo.find_by_id_for_user.assert_awaited_once_with("sess-1", "user-1")
+    bookmark_repo.find_by_session_and_user.assert_awaited_once_with("sess-1", "user-1")
+
+
+@pytest.mark.asyncio
+async def test_get_session_bookmarks_session_not_found_raises() -> None:
+    session_repo = MagicMock(spec=ConversationSessionRepository)
+    session_repo.find_by_id_for_user = AsyncMock(return_value=None)
+
+    bookmark_repo = MagicMock(spec=BookmarkRepository)
+    bookmark_repo.find_by_session_and_user = AsyncMock()
+
+    service = BookmarkService(bookmark_repo=bookmark_repo, session_repo=session_repo)
+
+    with pytest.raises(SessionNotFoundError):
+        await service.get_session_bookmarks(user_id="user-1", session_id="sess-not-exist")
+
+    session_repo.find_by_id_for_user.assert_awaited_once_with("sess-not-exist", "user-1")
+    bookmark_repo.find_by_session_and_user.assert_not_called()
+
 
