@@ -287,4 +287,67 @@ async def test_get_session_bookmarks_session_not_found_returns_404() -> None:
     assert response.json()["detail"] == "대화 세션을 찾을 수 없습니다."
 
 
+async def test_get_session_bookmarks_empty_list_returns_200() -> None:
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id_for_user = AsyncMock(return_value=_create_sample_session())
+    app.dependency_overrides[get_conversation_session_repository] = lambda: session_repo_mock
+
+    bookmark_repo_mock = MagicMock(spec=BookmarkRepository)
+    bookmark_repo_mock.find_by_session_and_user = AsyncMock(return_value=[])
+    app.dependency_overrides[get_bookmark_repository] = lambda: bookmark_repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/rag/bookmarks/session/sess-1?userId=user-1")
+
+    assert response.status_code == 200
+    assert response.json() == []
+    session_repo_mock.find_by_id_for_user.assert_awaited_once_with("sess-1", "user-1")
+    bookmark_repo_mock.find_by_session_and_user.assert_awaited_once_with("sess-1", "user-1")
+
+
+async def test_get_session_bookmarks_missing_user_id_returns_422() -> None:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/rag/bookmarks/session/sess-1")
+
+    assert response.status_code == 422
+
+
+async def test_create_bookmark_duplicate_turn_upserts_and_returns_existing_id() -> None:
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.find_by_id_for_user = AsyncMock(return_value=_create_sample_session())
+    app.dependency_overrides[get_conversation_session_repository] = lambda: session_repo_mock
+
+    bookmark_repo_mock = MagicMock(spec=BookmarkRepository)
+    # create 메서드가 기존 _id를 반환(upsert)하는 동작 모킹
+    bookmark_repo_mock.create = AsyncMock(return_value="bm-existing-id")
+    app.dependency_overrides[get_bookmark_repository] = lambda: bookmark_repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/rag/bookmarks?userId=user-1",
+            json={
+                "sessionId": "sess-1",
+                "turnIndex": 1,
+                "note": "중복 호출 시 갱신된 메모",
+            },
+        )
+
+    assert response.status_code in (200, 201)
+    body = response.json()
+    assert body["id"] == "bm-existing-id"
+    assert body["turnIndex"] == 1
+    assert body["note"] == "중복 호출 시 갱신된 메모"
+    assert body["sessionId"] == "sess-1"
+    bookmark_repo_mock.create.assert_awaited_once()
+    called_doc = bookmark_repo_mock.create.call_args[0][0]
+    assert called_doc["turnIndex"] == 1
+    assert called_doc["sessionId"] == "sess-1"
+    assert called_doc["userId"] == "user-1"
+    assert called_doc["note"] == "중복 호출 시 갱신된 메모"
+
+
+
 

@@ -197,3 +197,25 @@ async def test_create_bookmark_existing_turn_upserts_and_returns_id() -> None:
     assert "updatedAt" in set_fields
     collection.insert_one.assert_not_called()
 
+
+@pytest.mark.asyncio
+async def test_create_bookmark_session_level_does_not_upsert() -> None:
+    repo, collection = _make_repo()
+    collection.find_one = AsyncMock()
+    inserted_id = ObjectId("507f1f77bcf86cd799439099")
+    collection.insert_one = AsyncMock(return_value=MagicMock(inserted_id=inserted_id))
+
+    bookmark_dict = {
+        "userId": "user-1",
+        "sessionId": "sess-1",
+        "turnIndex": None,
+        "title": "세션 북마크",
+    }
+
+    result_id = await repo.create(bookmark_dict)
+
+    assert result_id == str(inserted_id)
+    collection.find_one.assert_not_called()
+    collection.insert_one.assert_awaited_once()
+
+

@@ -216,3 +216,20 @@ async def test_get_session_bookmarks_session_not_found_raises() -> None:
     bookmark_repo.find_by_session_and_user.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_get_session_bookmarks_empty_list_when_no_turn_bookmarks() -> None:
+    session_repo = MagicMock(spec=ConversationSessionRepository)
+    session_repo.find_by_id_for_user = AsyncMock(return_value=_create_sample_session())
+
+    bookmark_repo = MagicMock(spec=BookmarkRepository)
+    bookmark_repo.find_by_session_and_user = AsyncMock(return_value=[])
+
+    service = BookmarkService(bookmark_repo=bookmark_repo, session_repo=session_repo)
+    items = await service.get_session_bookmarks(user_id="user-1", session_id="sess-1")
+
+    assert items == []
+    session_repo.find_by_id_for_user.assert_awaited_once_with("sess-1", "user-1")
+    bookmark_repo.find_by_session_and_user.assert_awaited_once_with("sess-1", "user-1")
+
+
+
