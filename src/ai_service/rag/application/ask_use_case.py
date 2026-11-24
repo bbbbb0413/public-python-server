@@ -119,6 +119,8 @@ class AskUseCase:
         cached = await self._llm_cache.get(cache_key)
         if cached:
             yield cached
+            if chunks:
+                yield await self._critique_meta(command.question, cached, chunks, tenant)
             return
 
         if self._semantic_cache_enabled:
@@ -127,6 +129,10 @@ class AskUseCase:
             )
             if semantic_hit:
                 yield semantic_hit.answer
+                if chunks:
+                    yield await self._critique_meta(
+                        command.question, semantic_hit.answer, chunks, tenant
+                    )
                 return
 
         messages = await self._build_rag_messages(
@@ -147,27 +153,32 @@ class AskUseCase:
             )
 
         if chunks:
-            confidence = 0.0
-            critique_missing: list[str] = []
-            if self._critique_generator is not None:
-                try:
-                    critique = await self._critique_generator.generate(
-                        command.question, answer, chunks, tenant
-                    )
-                    confidence = critique.get_confidence()
-                    critique_missing = critique.get_missing()
-                except Exception:
-                    logger.warning(
-                        "AskUseCase 비평 생성 실패 (안전 폴백 적용): question=%s",
-                        command.question,
-                        exc_info=True,
-                    )
-                    confidence = 0.0
-                    critique_missing = []
-            confidence_meta = json.dumps(
-                {"confidence": confidence, "missing": critique_missing}
-            )
-            yield f"__CONFIDENCE:{confidence_meta}"
+            yield await self._critique_meta(command.question, answer, chunks, tenant)
+
+    async def _critique_meta(
+        self,
+        question: str,
+        answer: str,
+        chunks: list[SimilaritySearchResult],
+        tenant: str,
+    ) -> str:
+        confidence = 0.0
+        critique_missing: list[str] = []
+        if self._critique_generator is not None:
+            try:
+                critique = await self._critique_generator.generate(question, answer, chunks, tenant)
+                confidence = critique.get_confidence()
+                critique_missing = critique.get_missing()
+            except Exception:
+                logger.warning(
+                    "AskUseCase 비평 생성 실패 (안전 폴백 적용): question=%s",
+                    question,
+                    exc_info=True,
+                )
+                confidence = 0.0
+                critique_missing = []
+        confidence_meta = json.dumps({"confidence": confidence, "missing": critique_missing})
+        return f"__CONFIDENCE:{confidence_meta}"
 
     @staticmethod
     def _build_cache_key(question: str, chunks: list[SimilaritySearchResult]) -> str:
@@ -222,4 +233,3 @@ class AskUseCase:
         if len(masked) > MAX_SNIPPET_LENGTH:
             return masked[:MAX_SNIPPET_LENGTH] + "..."
         return masked
-

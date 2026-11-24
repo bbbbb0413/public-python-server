@@ -24,6 +24,9 @@ from ai_service.rag.application.hybrid_search_use_case import (
     HybridSearchResult,
     HybridSearchUseCase,
 )
+from ai_service.rag.infrastructure.cache.redis_semantic_cache_adapter import (
+    SemanticCacheHit,
+)
 from ai_service.rag.repository import ConversationSessionRepository
 from ai_service.rag.schemas import Critique
 
@@ -543,3 +546,188 @@ async def test_ask_use_case_yields_zero_confidence_and_missing_when_no_chunks(
     assert confidence_meta["confidence"] == 0.0
     assert confidence_meta["missing"] == []
 
+
+@pytest.mark.asyncio
+async def test_ask_use_case_yields_confidence_metadata_on_llm_cache_hit_when_chunks_exist(
+    mock_llm_gateway: MagicMock,
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_llm_cache: AsyncMock,
+    mock_semantic_cache: AsyncMock,
+    settings: Settings,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+    mock_session_repo: AsyncMock,
+    mock_query_rewriter: AsyncMock,
+):
+    chunks = [
+        SimilaritySearchResult(
+            text="캐시 테스트 문서 본문",
+            score=0.9,
+            metadata=VectorDocumentMetadata(
+                document_id="doc-cache-1",
+                file_name="cache_guide.pdf",
+                chunk_index=0,
+            ),
+        ),
+    ]
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=chunks,
+        query_embedding=[0.1, 0.2],
+    )
+
+    mock_llm_cache.get.return_value = "캐시된 LLM 답변입니다."
+
+    mock_critique_generator = AsyncMock(spec=CritiqueGeneratorService)
+    mock_critique_generator.generate.return_value = Critique.of(
+        answered=True, missing=[], next_query="", confidence=0.95
+    )
+
+    use_case = AskUseCase(
+        llm_gateway=mock_llm_gateway,
+        hybrid_search=mock_hybrid_search,
+        get_active_prompt=mock_get_active_prompt,
+        llm_cache=mock_llm_cache,
+        semantic_cache=mock_semantic_cache,
+        settings=settings,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=mock_session_repo,
+        query_rewriter=mock_query_rewriter,
+        critique_generator=mock_critique_generator,
+    )
+
+    command = AskCommand(question="캐시 적중 질문")
+    results = [chunk async for chunk in use_case.execute(command)]
+
+    assert len(results) == 3
+    assert results[0].startswith("__SOURCES:")
+    assert results[1] == "캐시된 LLM 답변입니다."
+    assert results[2].startswith("__CONFIDENCE:")
+
+    confidence_meta = json.loads(results[2][len("__CONFIDENCE:") :])
+    assert confidence_meta["confidence"] == 0.95
+    assert confidence_meta["missing"] == []
+
+    mock_critique_generator.generate.assert_awaited_once_with(
+        "캐시 적중 질문", "캐시된 LLM 답변입니다.", chunks, "default"
+    )
+    mock_llm_gateway.stream.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ask_use_case_yields_confidence_metadata_on_semantic_cache_hit_when_chunks_exist(
+    mock_llm_gateway: MagicMock,
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_llm_cache: AsyncMock,
+    mock_semantic_cache: AsyncMock,
+    settings: Settings,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+    mock_session_repo: AsyncMock,
+    mock_query_rewriter: AsyncMock,
+):
+    chunks = [
+        SimilaritySearchResult(
+            text="시맨틱 캐시 테스트 문서 본문",
+            score=0.88,
+            metadata=VectorDocumentMetadata(
+                document_id="doc-sem-1",
+                file_name="sem_guide.pdf",
+                chunk_index=0,
+            ),
+        ),
+    ]
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=chunks,
+        query_embedding=[0.1, 0.2],
+    )
+
+    mock_llm_cache.get.return_value = None
+
+    settings.semantic_cache_enabled = True
+    mock_semantic_cache.find_similar.return_value = SemanticCacheHit(
+        answer="시맨틱 캐시된 답변입니다.",
+        score=0.92,
+    )
+
+    mock_critique_generator = AsyncMock(spec=CritiqueGeneratorService)
+    mock_critique_generator.generate.return_value = Critique.of(
+        answered=False, missing=["결여 항목 A"], next_query="", confidence=0.35
+    )
+
+    use_case = AskUseCase(
+        llm_gateway=mock_llm_gateway,
+        hybrid_search=mock_hybrid_search,
+        get_active_prompt=mock_get_active_prompt,
+        llm_cache=mock_llm_cache,
+        semantic_cache=mock_semantic_cache,
+        settings=settings,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=mock_session_repo,
+        query_rewriter=mock_query_rewriter,
+        critique_generator=mock_critique_generator,
+    )
+
+    command = AskCommand(question="시맨틱 캐시 적중 질문")
+    results = [chunk async for chunk in use_case.execute(command)]
+
+    assert len(results) == 3
+    assert results[0].startswith("__SOURCES:")
+    assert results[1] == "시맨틱 캐시된 답변입니다."
+    assert results[2].startswith("__CONFIDENCE:")
+
+    confidence_meta = json.loads(results[2][len("__CONFIDENCE:") :])
+    assert confidence_meta["confidence"] == 0.35
+    assert confidence_meta["missing"] == ["결여 항목 A"]
+
+    mock_critique_generator.generate.assert_awaited_once_with(
+        "시맨틱 캐시 적중 질문", "시맨틱 캐시된 답변입니다.", chunks, "default"
+    )
+    mock_llm_gateway.stream.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ask_use_case_llm_cache_hit_skips_duplicate_confidence_when_no_chunks(
+    mock_llm_gateway: MagicMock,
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_llm_cache: AsyncMock,
+    mock_semantic_cache: AsyncMock,
+    settings: Settings,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+    mock_session_repo: AsyncMock,
+    mock_query_rewriter: AsyncMock,
+):
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=[],
+        query_embedding=[0.1, 0.2],
+    )
+    mock_llm_cache.get.return_value = "문서 없이 캐시된 답변"
+
+    mock_critique_generator = AsyncMock(spec=CritiqueGeneratorService)
+
+    use_case = AskUseCase(
+        llm_gateway=mock_llm_gateway,
+        hybrid_search=mock_hybrid_search,
+        get_active_prompt=mock_get_active_prompt,
+        llm_cache=mock_llm_cache,
+        semantic_cache=mock_semantic_cache,
+        settings=settings,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=mock_session_repo,
+        query_rewriter=mock_query_rewriter,
+        critique_generator=mock_critique_generator,
+    )
+
+    command = AskCommand(question="청크 없는 캐시 질문")
+    results = [chunk async for chunk in use_case.execute(command)]
+
+    assert len(results) == 2
+    assert results[0].startswith("__CONFIDENCE:")
+    assert results[1] == "문서 없이 캐시된 답변"
+    mock_critique_generator.generate.assert_not_called()
