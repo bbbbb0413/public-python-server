@@ -17,6 +17,7 @@ from ai_service.rag.application.ask_use_case import AskUseCase
 from ai_service.rag.application.conversational_query_rewriter_service import (
     ConversationalQueryRewriter,
 )
+from ai_service.rag.application.critique_generator_service import CritiqueGeneratorService
 from ai_service.rag.application.filter.rag_content_validator import RagContentValidator
 from ai_service.rag.application.filter.secret_pii_scanner import SecretPiiScanner
 from ai_service.rag.application.hybrid_search_use_case import (
@@ -24,6 +25,7 @@ from ai_service.rag.application.hybrid_search_use_case import (
     HybridSearchUseCase,
 )
 from ai_service.rag.repository import ConversationSessionRepository
+from ai_service.rag.schemas import Critique
 
 
 def _make_prompt_template(name: str = "rag-qa-system") -> PromptTemplate:
@@ -239,6 +241,11 @@ async def test_ask_use_case_yields_confidence_metadata_when_chunks_exist(
         query_embedding=[0.1, 0.2],
     )
 
+    mock_critique_generator = AsyncMock(spec=CritiqueGeneratorService)
+    mock_critique_generator.generate.return_value = Critique.of(
+        answered=True, missing=[], next_query="", confidence=0.85
+    )
+
     use_case = AskUseCase(
         llm_gateway=mock_llm_gateway,
         hybrid_search=mock_hybrid_search,
@@ -250,17 +257,247 @@ async def test_ask_use_case_yields_confidence_metadata_when_chunks_exist(
         secret_pii_scanner=secret_pii_scanner,
         session_repo=mock_session_repo,
         query_rewriter=mock_query_rewriter,
+        critique_generator=mock_critique_generator,
     )
 
     command = AskCommand(question="신뢰도 테스트 질문")
     results = [chunk async for chunk in use_case.execute(command)]
 
-    assert len(results) >= 2
+    # 1. __SOURCES가 가장 먼저 방출되고, 조기 __CONFIDENCE는 방출되지 않음
     assert results[0].startswith("__SOURCES:")
-    assert results[1].startswith("__CONFIDENCE:")
+    assert not results[1].startswith("__CONFIDENCE:")
 
-    confidence_meta = json.loads(results[1][len("__CONFIDENCE:") :])
-    assert confidence_meta["confidence"] == 0.88
+    # 2. 토큰 스트리밍 후 마지막에 비평 기반 __CONFIDENCE 방출
+    assert results[-1].startswith("__CONFIDENCE:")
+    confidence_meta = json.loads(results[-1][len("__CONFIDENCE:") :])
+    # 검색 점수 0.88이 아니라 실제 비평 신뢰도 0.85가 반영됨
+    assert confidence_meta["confidence"] == 0.85
+    assert confidence_meta["missing"] == []
+
+    # 3. critique_generator.generate가 호출되었는지 검증
+    mock_critique_generator.generate.assert_awaited_once_with(
+        "신뢰도 테스트 질문", "테스트 답변입니다.", chunks, "default"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ask_use_case_yields_low_confidence_and_missing_when_critique_detects_hallucination(
+    mock_llm_gateway: MagicMock,
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_llm_cache: AsyncMock,
+    mock_semantic_cache: AsyncMock,
+    settings: Settings,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+    mock_session_repo: AsyncMock,
+    mock_query_rewriter: AsyncMock,
+):
+    chunks = [
+        SimilaritySearchResult(
+            text="정확한 사실 정보가 담긴 문서 청크",
+            score=0.88,
+            metadata=VectorDocumentMetadata(
+                document_id="doc-1",
+                file_name="fact.pdf",
+                chunk_index=0,
+            ),
+        ),
+    ]
+
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=chunks,
+        query_embedding=[0.1, 0.2],
+    )
+
+    mock_critique_generator = AsyncMock(spec=CritiqueGeneratorService)
+    # LLM이 환각 답변을 생성하여 비평 점수가 낮고 결여 항목이 발견된 상황 모킹
+    mock_critique_generator.generate.return_value = Critique.of(
+        answered=False,
+        missing=["핵심 수치 정보 불일치"],
+        next_query="구체적 수치 재검색",
+        confidence=0.35,
+    )
+
+    use_case = AskUseCase(
+        llm_gateway=mock_llm_gateway,
+        hybrid_search=mock_hybrid_search,
+        get_active_prompt=mock_get_active_prompt,
+        llm_cache=mock_llm_cache,
+        semantic_cache=mock_semantic_cache,
+        settings=settings,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=mock_session_repo,
+        query_rewriter=mock_query_rewriter,
+        critique_generator=mock_critique_generator,
+    )
+
+    command = AskCommand(question="환각 유발 질문")
+    results = [chunk async for chunk in use_case.execute(command)]
+
+    assert results[0].startswith("__SOURCES:")
+    assert results[-1].startswith("__CONFIDENCE:")
+
+    confidence_meta = json.loads(results[-1][len("__CONFIDENCE:") :])
+    # 검색 점수 0.88이 아닌 비평 결과(0.35 및 missing 항목)가 반영됨
+    assert confidence_meta["confidence"] == 0.35
+    assert confidence_meta["missing"] == ["핵심 수치 정보 불일치"]
+
+
+@pytest.mark.asyncio
+async def test_ask_use_case_critique_fallback_on_exception(
+    mock_llm_gateway: MagicMock,
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_llm_cache: AsyncMock,
+    mock_semantic_cache: AsyncMock,
+    settings: Settings,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+    mock_session_repo: AsyncMock,
+    mock_query_rewriter: AsyncMock,
+):
+    chunks = [
+        SimilaritySearchResult(
+            text="문서 본문",
+            score=0.9,
+            metadata=VectorDocumentMetadata(
+                document_id="doc-1",
+                file_name="guide.pdf",
+                chunk_index=0,
+            ),
+        ),
+    ]
+
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=chunks,
+        query_embedding=[0.1, 0.2],
+    )
+
+    mock_critique_generator = AsyncMock(spec=CritiqueGeneratorService)
+    mock_critique_generator.generate.side_effect = RuntimeError("LLM Gateway timeout")
+
+    use_case = AskUseCase(
+        llm_gateway=mock_llm_gateway,
+        hybrid_search=mock_hybrid_search,
+        get_active_prompt=mock_get_active_prompt,
+        llm_cache=mock_llm_cache,
+        semantic_cache=mock_semantic_cache,
+        settings=settings,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=mock_session_repo,
+        query_rewriter=mock_query_rewriter,
+        critique_generator=mock_critique_generator,
+    )
+
+    command = AskCommand(question="예외 테스트 질문")
+    results = [chunk async for chunk in use_case.execute(command)]
+
+    # 비평 실패 시 안전 폴백(confidence=0.0, missing=[]) 방출
+    assert results[-1].startswith("__CONFIDENCE:")
+    confidence_meta = json.loads(results[-1][len("__CONFIDENCE:") :])
+    assert confidence_meta["confidence"] == 0.0
+    assert confidence_meta["missing"] == []
+
+
+@pytest.mark.asyncio
+async def test_ask_use_case_fallback_when_critique_generator_is_none(
+    mock_llm_gateway: MagicMock,
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_llm_cache: AsyncMock,
+    mock_semantic_cache: AsyncMock,
+    settings: Settings,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+    mock_session_repo: AsyncMock,
+    mock_query_rewriter: AsyncMock,
+):
+    chunks = [
+        SimilaritySearchResult(
+            text="문서 본문",
+            score=0.95,
+            metadata=VectorDocumentMetadata(
+                document_id="doc-1",
+                file_name="guide.pdf",
+                chunk_index=0,
+            ),
+        ),
+    ]
+
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=chunks,
+        query_embedding=[0.1, 0.2],
+    )
+
+    use_case = AskUseCase(
+        llm_gateway=mock_llm_gateway,
+        hybrid_search=mock_hybrid_search,
+        get_active_prompt=mock_get_active_prompt,
+        llm_cache=mock_llm_cache,
+        semantic_cache=mock_semantic_cache,
+        settings=settings,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=mock_session_repo,
+        query_rewriter=mock_query_rewriter,
+        critique_generator=None,
+    )
+
+    command = AskCommand(question="생성기 미주입 질문")
+    results = [chunk async for chunk in use_case.execute(command)]
+
+    assert results[-1].startswith("__CONFIDENCE:")
+    confidence_meta = json.loads(results[-1][len("__CONFIDENCE:") :])
+    assert confidence_meta["confidence"] == 0.0
+    assert confidence_meta["missing"] == []
+
+
+@pytest.mark.asyncio
+async def test_ask_use_case_skips_critique_when_no_chunks(
+    mock_llm_gateway: MagicMock,
+    mock_hybrid_search: AsyncMock,
+    mock_get_active_prompt: AsyncMock,
+    mock_llm_cache: AsyncMock,
+    mock_semantic_cache: AsyncMock,
+    settings: Settings,
+    rag_validator: RagContentValidator,
+    secret_pii_scanner: SecretPiiScanner,
+    mock_session_repo: AsyncMock,
+    mock_query_rewriter: AsyncMock,
+):
+    mock_hybrid_search.execute.return_value = HybridSearchResult(
+        chunks=[],
+        query_embedding=[0.1, 0.2],
+    )
+
+    mock_critique_generator = AsyncMock(spec=CritiqueGeneratorService)
+
+    use_case = AskUseCase(
+        llm_gateway=mock_llm_gateway,
+        hybrid_search=mock_hybrid_search,
+        get_active_prompt=mock_get_active_prompt,
+        llm_cache=mock_llm_cache,
+        semantic_cache=mock_semantic_cache,
+        settings=settings,
+        rag_validator=rag_validator,
+        secret_pii_scanner=secret_pii_scanner,
+        session_repo=mock_session_repo,
+        query_rewriter=mock_query_rewriter,
+        critique_generator=mock_critique_generator,
+    )
+
+    command = AskCommand(question="청크 없음 질문")
+    results = [chunk async for chunk in use_case.execute(command)]
+
+    # 청크가 없으므로 비평 호출 건너뜀
+    mock_critique_generator.generate.assert_not_called()
+
+    assert results[0].startswith("__CONFIDENCE:")
+    confidence_meta = json.loads(results[0][len("__CONFIDENCE:") :])
+    assert confidence_meta["confidence"] == 0.0
     assert confidence_meta["missing"] == []
 
 

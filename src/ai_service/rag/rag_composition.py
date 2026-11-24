@@ -146,6 +146,9 @@ async def build_rag_composition(
     secret_pii_scanner = SecretPiiScanner()
     query_rewriter = ConversationalQueryRewriter(llm_provider)
 
+    critique_generator = CritiqueGeneratorService(llm_gateway_service, settings)
+    query_refiner = QueryRefinerService()
+
     ask_use_case = AskUseCase(
         llm_gateway_service,
         hybrid_search,
@@ -157,10 +160,9 @@ async def build_rag_composition(
         secret_pii_scanner,
         session_repo,
         query_rewriter,
+        critique_generator=critique_generator,
     )
 
-    critique_generator = CritiqueGeneratorService(llm_gateway_service, settings)
-    query_refiner = QueryRefinerService()
     agentic_ask_use_case = AgenticAskUseCase(
         hybrid_search,
         llm_gateway_service,
