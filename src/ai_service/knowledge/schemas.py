@@ -87,6 +87,21 @@ class Document:
             )
         )
 
+    def mark_reindex_failed(self, error_message: str | None = None) -> "Document":
+        if self.status == "processed":
+            return Document.restore(
+                DocumentProps(
+                    id=self.id,
+                    file_name=self.file_name,
+                    mime_type=self.mime_type,
+                    status=self.status,
+                    chunk_count=self.chunk_count,
+                    created_at=self.created_at,
+                    error_message=error_message,
+                )
+            )
+        return self.mark_failed(error_message)
+
 
 @dataclass(frozen=True)
 class Chunk:

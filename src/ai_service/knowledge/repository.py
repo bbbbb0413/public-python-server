@@ -1,7 +1,7 @@
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from bson import ObjectId
 from gridfs.errors import NoFile
@@ -15,6 +15,7 @@ from qdrant_client.models import (
     MatchAny,
     MatchValue,
     PayloadSchemaType,
+    PointIdsList,
     PointStruct,
     VectorParams,
 )
@@ -292,6 +293,26 @@ class QdrantVectorAdapter:
                     must=[FieldCondition(key="documentId", match=MatchValue(value=document_id))]
                 )
             ),
+        )
+
+    async def find_point_ids_by_document_id(self, document_id: str) -> list[str]:
+        records, _ = await self._client.scroll(
+            collection_name=self._collection_name,
+            scroll_filter=Filter(
+                must=[FieldCondition(key="documentId", match=MatchValue(value=document_id))]
+            ),
+            limit=_SCROLL_PAGE_LIMIT,
+            with_payload=False,
+            with_vectors=False,
+        )
+        return [str(r.id) for r in records]
+
+    async def delete_points_by_ids(self, point_ids: list[str]) -> None:
+        if not point_ids:
+            return
+        await self._client.delete(
+            collection_name=self._collection_name,
+            points_selector=PointIdsList(points=cast(list[int | str | uuid.UUID], point_ids)),
         )
 
 
