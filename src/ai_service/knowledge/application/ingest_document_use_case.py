@@ -8,7 +8,11 @@ from typing import Any
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
 
-from ai_service.knowledge.repository import DocumentRepository, QdrantVectorAdapter
+from ai_service.knowledge.repository import (
+    DocumentRepository,
+    QdrantVectorAdapter,
+    _to_point_id,
+)
 from ai_service.knowledge.schemas import (
     Chunk,
     Document,
@@ -99,6 +103,7 @@ class IngestDocumentUseCase:
 
         document_id = document.id
         assert document_id is not None
+        was_processed = document.status == "processed"
 
         # 처리 성공/실패와 무관하게 사용자가 올린 원본은 그대로 보존한다
         # (근거 확인 화면에서 "원문 보기"로 열람하거나, 나중에 재시도할 때 쓴다).
@@ -118,17 +123,26 @@ class IngestDocumentUseCase:
                 raw_text, document_id, command.file_name, on_progress=on_progress
             )
 
+            existing_point_ids = await self._vector_store.find_point_ids_by_document_id(document_id)
+
             if on_progress:
                 await on_progress("index", 90)
-            await self._vector_store.delete_by_document_id(document_id)
             await self._vector_store.upsert(vector_docs)
+
+            new_point_ids = {_to_point_id(d.id) for d in vector_docs}
+            stale_ids = [pid for pid in existing_point_ids if pid not in new_point_ids]
+            if stale_ids:
+                await self._vector_store.delete_points_by_ids(stale_ids)
 
             processed = document.mark_processed(len(vector_docs))
             return await self._document_repo.update(processed)
         except Exception as exc:
             logger.exception("문서 수집 실패: %s", command.file_name)
             error_message = str(exc).strip() or "문서 인제스트 처리 중 오류가 발생했습니다."
-            failed = document.mark_failed(error_message)
+            if was_processed:
+                failed = document.mark_reindex_failed(error_message)
+            else:
+                failed = document.mark_failed(error_message)
             await self._document_repo.update(failed)
             raise
 

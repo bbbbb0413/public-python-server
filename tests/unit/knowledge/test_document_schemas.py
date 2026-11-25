@@ -72,3 +72,39 @@ def test_document_out_serialization_without_error_message():
 
     dumped = out.model_dump(by_alias=True)
     assert dumped["errorMessage"] is None
+
+
+def test_document_mark_reindex_failed_when_processed():
+    created_at = datetime.now(UTC)
+    doc = Document(
+        id="doc-123",
+        file_name="sample.txt",
+        mime_type="text/plain",
+        status="processed",
+        chunk_count=5,
+        created_at=created_at,
+        error_message=None,
+    )
+    failed = doc.mark_reindex_failed("일시적 네트워크 타임아웃")
+    assert failed.status == "processed"
+    assert failed.chunk_count == 5
+    assert failed.error_message == "일시적 네트워크 타임아웃"
+    assert failed.created_at == created_at
+
+
+def test_document_mark_reindex_failed_when_not_processed():
+    created_at = datetime.now(UTC)
+    doc = Document(
+        id="doc-123",
+        file_name="sample.txt",
+        mime_type="text/plain",
+        status="pending",
+        chunk_count=0,
+        created_at=created_at,
+        error_message=None,
+    )
+    failed = doc.mark_reindex_failed("임베딩 오류")
+    assert failed.status == "failed"
+    assert failed.chunk_count == 0
+    assert failed.error_message == "임베딩 오류"
+

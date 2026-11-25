@@ -28,6 +28,8 @@ def mock_dependencies():
 
     vector_store = MagicMock()
     vector_store.delete_by_document_id = AsyncMock()
+    vector_store.find_point_ids_by_document_id = AsyncMock(return_value=[])
+    vector_store.delete_points_by_ids = AsyncMock()
     vector_store.upsert = AsyncMock()
 
     embedding_provider = MagicMock()
@@ -139,7 +141,8 @@ async def test_ingest_document_use_case_retry_existing_failed_document(mock_depe
     mock_dependencies["doc_repo"].save_original_file.assert_awaited_once_with(
         "doc-failed-1", command.content, "test.txt", "text/plain"
     )
-    mock_dependencies["vector_store"].delete_by_document_id.assert_awaited_once_with("doc-failed-1")
+    mock_dependencies["vector_store"].delete_by_document_id.assert_not_called()
+    mock_dependencies["vector_store"].find_point_ids_by_document_id.assert_awaited_once_with("doc-failed-1")
     mock_dependencies["vector_store"].upsert.assert_awaited_once()
 
 
@@ -281,4 +284,173 @@ async def test_ingest_document_use_case_corrupted_pdf_stores_error(
     assert last_update_arg.status == "failed"
     assert last_update_arg.error_message is not None
     assert len(last_update_arg.error_message) > 0
+
+
+@pytest.mark.asyncio
+async def test_ingest_document_reindex_failure_preserves_processed_document_and_chunks(
+    mock_dependencies,
+):
+    existing_doc = Document(
+        id="doc-processed-1",
+        file_name="test.txt",
+        mime_type="text/plain",
+        chunk_count=5,
+        status="processed",
+        created_at=datetime.now(UTC),
+    )
+    mock_dependencies["doc_repo"].find_by_id = AsyncMock(return_value=existing_doc)
+    mock_dependencies["vector_store"].find_point_ids_by_document_id = AsyncMock(
+        return_value=["point-1", "point-2", "point-3", "point-4", "point-5"]
+    )
+    mock_dependencies["vector_store"].upsert = AsyncMock(
+        side_effect=RuntimeError("Qdrant connection timeout")
+    )
+
+    use_case = IngestDocumentUseCase(
+        document_repo=mock_dependencies["doc_repo"],
+        vector_store=mock_dependencies["vector_store"],
+        embedding_provider=mock_dependencies["embedding_provider"],
+        llm_provider=mock_dependencies["llm_provider"],
+        rag_validator=mock_dependencies["rag_validator"],
+        contextual_embeddings_enabled=False,
+    )
+
+    command = IngestDocumentCommand(
+        document_id="doc-processed-1",
+        file_name="test.txt",
+        mime_type="text/plain",
+        content=b"Sample document content for re-ingestion.",
+    )
+
+    with pytest.raises(RuntimeError, match="Qdrant connection timeout"):
+        await use_case.execute(command)
+
+    mock_dependencies["vector_store"].delete_by_document_id.assert_not_called()
+    mock_dependencies["doc_repo"].update.assert_awaited()
+    last_update_arg = mock_dependencies["doc_repo"].update.await_args[0][0]
+    assert last_update_arg.status == "processed"
+    assert last_update_arg.chunk_count == 5
+    assert last_update_arg.error_message == "Qdrant connection timeout"
+
+
+@pytest.mark.asyncio
+async def test_ingest_document_reindex_prunes_stale_chunks(mock_dependencies):
+    existing_doc = Document(
+        id="doc-processed-prune",
+        file_name="test.txt",
+        mime_type="text/plain",
+        chunk_count=5,
+        status="processed",
+        created_at=datetime.now(UTC),
+    )
+    mock_dependencies["doc_repo"].find_by_id = AsyncMock(return_value=existing_doc)
+    # 기존 포인트 ID 목록
+    old_stale_id_1 = "stale-point-uuid-1"
+    old_stale_id_2 = "stale-point-uuid-2"
+    mock_dependencies["vector_store"].find_point_ids_by_document_id = AsyncMock(
+        return_value=[old_stale_id_1, old_stale_id_2]
+    )
+
+    use_case = IngestDocumentUseCase(
+        document_repo=mock_dependencies["doc_repo"],
+        vector_store=mock_dependencies["vector_store"],
+        embedding_provider=mock_dependencies["embedding_provider"],
+        llm_provider=mock_dependencies["llm_provider"],
+        rag_validator=mock_dependencies["rag_validator"],
+        contextual_embeddings_enabled=False,
+    )
+
+    command = IngestDocumentCommand(
+        document_id="doc-processed-prune",
+        file_name="test.txt",
+        mime_type="text/plain",
+        content=b"Short new content.",
+    )
+
+    result = await use_case.execute(command)
+
+    assert result.status == "processed"
+    mock_dependencies["vector_store"].delete_by_document_id.assert_not_called()
+    mock_dependencies["vector_store"].upsert.assert_awaited_once()
+    mock_dependencies["vector_store"].delete_points_by_ids.assert_awaited_once()
+    deleted_ids = mock_dependencies["vector_store"].delete_points_by_ids.await_args[0][0]
+    assert old_stale_id_1 in deleted_ids
+    assert old_stale_id_2 in deleted_ids
+
+
+@pytest.mark.asyncio
+async def test_ingest_document_reindex_failure_during_guardrail_preserves_processed_document(
+    mock_dependencies,
+):
+    existing_doc = Document(
+        id="doc-processed-blocked",
+        file_name="test.txt",
+        mime_type="text/plain",
+        chunk_count=3,
+        status="processed",
+        created_at=datetime.now(UTC),
+    )
+    mock_dependencies["doc_repo"].find_by_id = AsyncMock(return_value=existing_doc)
+    mock_dependencies["rag_validator"].inspect_input.return_value = (
+        GuardrailVerdict.block("인젝션 감지")
+    )
+
+    use_case = IngestDocumentUseCase(
+        document_repo=mock_dependencies["doc_repo"],
+        vector_store=mock_dependencies["vector_store"],
+        embedding_provider=mock_dependencies["embedding_provider"],
+        llm_provider=mock_dependencies["llm_provider"],
+        rag_validator=mock_dependencies["rag_validator"],
+        contextual_embeddings_enabled=False,
+    )
+
+    command = IngestDocumentCommand(
+        document_id="doc-processed-blocked",
+        file_name="test.txt",
+        mime_type="text/plain",
+        content=b"Dangerous prompt content.",
+    )
+
+    with pytest.raises(ValueError, match="인제스트 차단: 인젝션 감지"):
+        await use_case.execute(command)
+
+    mock_dependencies["vector_store"].delete_by_document_id.assert_not_called()
+    mock_dependencies["doc_repo"].update.assert_awaited()
+    last_update_arg = mock_dependencies["doc_repo"].update.await_args[0][0]
+    assert last_update_arg.status == "processed"
+    assert last_update_arg.chunk_count == 3
+    assert "인젝션 감지" in last_update_arg.error_message
+
+
+@pytest.mark.asyncio
+async def test_initial_ingest_failure_marks_failed(mock_dependencies):
+    mock_dependencies["doc_repo"].find_by_id = AsyncMock(return_value=None)
+    mock_dependencies["embedding_provider"].embed = AsyncMock(
+        side_effect=RuntimeError("Embedding service down")
+    )
+
+    use_case = IngestDocumentUseCase(
+        document_repo=mock_dependencies["doc_repo"],
+        vector_store=mock_dependencies["vector_store"],
+        embedding_provider=mock_dependencies["embedding_provider"],
+        llm_provider=mock_dependencies["llm_provider"],
+        rag_validator=mock_dependencies["rag_validator"],
+        contextual_embeddings_enabled=False,
+    )
+
+    command = IngestDocumentCommand(
+        file_name="new_doc.txt",
+        mime_type="text/plain",
+        content=b"New document content.",
+    )
+
+    with pytest.raises(RuntimeError, match="Embedding service down"):
+        await use_case.execute(command)
+
+    mock_dependencies["doc_repo"].update.assert_awaited()
+    last_update_arg = mock_dependencies["doc_repo"].update.await_args[0][0]
+    assert last_update_arg.status == "failed"
+    assert last_update_arg.chunk_count == 0
+    assert last_update_arg.error_message == "Embedding service down"
+
 
