@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
+from ai_service.feedback.repository import AnswerFeedbackRepository
 from ai_service.rag.repository import (
     BookmarkRepository,
     ConversationSessionRepository,
@@ -25,14 +26,20 @@ class BookmarkNotFoundError(LookupError):
 
 
 class SessionService:
-    def __init__(self, repo: ConversationSessionRepository | Any) -> None:
+    def __init__(
+        self,
+        repo: ConversationSessionRepository | Any,
+        bookmark_repo: BookmarkRepository | Any | None = None,
+        feedback_repo: AnswerFeedbackRepository | Any | None = None,
+    ) -> None:
         self._repo = repo
+        self._bookmark_repo = bookmark_repo
+        self._feedback_repo = feedback_repo
 
     async def get_sessions(
         self, user_id: str, page: int, limit: int, keyword: str | None = None
     ) -> list[ConversationSession]:
         return await self._repo.find_by_user_id(user_id, page, limit, keyword)
-
 
     async def get_session(self, session_id: str, user_id: str) -> ConversationSession:
         session = await self._repo.find_by_id_for_user(session_id, user_id)
@@ -44,6 +51,11 @@ class SessionService:
         deleted = await self._repo.delete_by_id_for_user(session_id, user_id)
         if not deleted:
             raise SessionNotFoundError(session_id)
+        if self._bookmark_repo is not None:
+            await self._bookmark_repo.delete_by_session_for_user(session_id, user_id)
+        if self._feedback_repo is not None:
+            await self._feedback_repo.delete_by_session_for_user(session_id, user_id)
+
 
     async def set_bookmark(
         self, session_id: str, user_id: str, bookmarked: bool | None = None

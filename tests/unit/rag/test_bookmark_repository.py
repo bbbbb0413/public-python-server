@@ -219,3 +219,21 @@ async def test_create_bookmark_session_level_does_not_upsert() -> None:
     collection.insert_one.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_delete_by_session_for_user_calls_delete_many() -> None:
+    repo, collection = _make_repo()
+    result_mock = MagicMock()
+    result_mock.deleted_count = 3
+    collection.delete_many = AsyncMock(return_value=result_mock)
+
+    deleted_count = await repo.delete_by_session_for_user(
+        session_id="session-1", user_id="user-1"
+    )
+
+    assert deleted_count == 3
+    collection.delete_many.assert_awaited_once_with(
+        {"sessionId": "session-1", "userId": "user-1"}
+    )
+
+
+

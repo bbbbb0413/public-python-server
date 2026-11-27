@@ -5,9 +5,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from ai_service.feedback.dependencies import get_answer_feedback_repository
+from ai_service.feedback.repository import AnswerFeedbackRepository
 from ai_service.main import app
-from ai_service.rag.dependencies import get_conversation_session_repository
-from ai_service.rag.repository import ConversationSessionRepository
+from ai_service.rag.dependencies import (
+    get_bookmark_repository,
+    get_conversation_session_repository,
+)
+from ai_service.rag.repository import BookmarkRepository, ConversationSessionRepository
 from ai_service.rag.schemas import (
     ConversationSession,
     RestoreProps,
@@ -17,8 +22,16 @@ from ai_service.rag.schemas import (
 
 @pytest.fixture(autouse=True)
 def _clear_overrides():
+    bookmark_repo_mock = MagicMock(spec=BookmarkRepository)
+    bookmark_repo_mock.delete_by_session_for_user = AsyncMock(return_value=0)
+    app.dependency_overrides[get_bookmark_repository] = lambda: bookmark_repo_mock
+
+    feedback_repo_mock = MagicMock(spec=AnswerFeedbackRepository)
+    feedback_repo_mock.delete_by_session_for_user = AsyncMock(return_value=0)
+    app.dependency_overrides[get_answer_feedback_repository] = lambda: feedback_repo_mock
     yield
     app.dependency_overrides.clear()
+
 
 
 async def test_get_session_returns_turns_with_metadata() -> None:
@@ -306,6 +319,34 @@ async def test_delete_session_scopes_to_owner() -> None:
 
     assert response.status_code == 204
     repo_mock.delete_by_id_for_user.assert_awaited_once_with("session-1", "user-1")
+
+
+async def test_delete_session_cascades_bookmarks_and_feedback() -> None:
+    from ai_service.feedback.dependencies import get_answer_feedback_repository
+    from ai_service.rag.dependencies import get_bookmark_repository
+
+    session_repo_mock = MagicMock(spec=ConversationSessionRepository)
+    session_repo_mock.delete_by_id_for_user = AsyncMock(return_value=True)
+
+    bookmark_repo_mock = MagicMock()
+    bookmark_repo_mock.delete_by_session_for_user = AsyncMock(return_value=2)
+
+    feedback_repo_mock = MagicMock()
+    feedback_repo_mock.delete_by_session_for_user = AsyncMock(return_value=3)
+
+    app.dependency_overrides[get_conversation_session_repository] = lambda: session_repo_mock
+    app.dependency_overrides[get_bookmark_repository] = lambda: bookmark_repo_mock
+    app.dependency_overrides[get_answer_feedback_repository] = lambda: feedback_repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.delete("/rag/sessions/session-123?userId=user-1")
+
+    assert response.status_code == 204
+    session_repo_mock.delete_by_id_for_user.assert_awaited_once_with("session-123", "user-1")
+    bookmark_repo_mock.delete_by_session_for_user.assert_awaited_once_with("session-123", "user-1")
+    feedback_repo_mock.delete_by_session_for_user.assert_awaited_once_with("session-123", "user-1")
+
 
 
 async def test_delete_session_of_another_user_returns_404() -> None:

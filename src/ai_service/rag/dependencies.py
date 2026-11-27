@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import Depends
 
 from ai_service.core.database import MongoDbDep
+from ai_service.feedback.dependencies import AnswerFeedbackRepositoryDep
 from ai_service.rag.repository import (
     BookmarkRepository,
     ConversationSessionRepository,
@@ -19,13 +20,6 @@ ConversationSessionRepositoryDep = Annotated[
 ]
 
 
-def get_session_service(repo: ConversationSessionRepositoryDep) -> SessionService:
-    return SessionService(repo)
-
-
-SessionServiceDep = Annotated[SessionService, Depends(get_session_service)]
-
-
 def get_bookmark_repository(db: MongoDbDep) -> BookmarkRepository:
     return BookmarkRepository(db)
 
@@ -33,6 +27,22 @@ def get_bookmark_repository(db: MongoDbDep) -> BookmarkRepository:
 BookmarkRepositoryDep = Annotated[
     BookmarkRepository, Depends(get_bookmark_repository)
 ]
+
+
+def get_session_service(
+    repo: ConversationSessionRepositoryDep,
+    bookmark_repo: BookmarkRepositoryDep,
+    feedback_repo: AnswerFeedbackRepositoryDep,
+) -> SessionService:
+    return SessionService(
+        repo=repo,
+        bookmark_repo=bookmark_repo,
+        feedback_repo=feedback_repo,
+    )
+
+
+SessionServiceDep = Annotated[SessionService, Depends(get_session_service)]
+
 
 
 def get_bookmark_service(
