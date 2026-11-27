@@ -260,6 +260,14 @@ class BookmarkRepository:
         )
         return result2.deleted_count > 0
 
+    async def delete_by_session_for_user(self, session_id: str, user_id: str) -> int:
+        """한 세션에서 이 사용자의 모든 북마크를 삭제한다."""
+        result = await self._collection.delete_many(
+            {"sessionId": session_id, "userId": user_id}
+        )
+        return int(result.deleted_count)
+
+
 
 __all__ = [
     "BOOKMARK_COLLECTION_NAME",

@@ -211,4 +211,68 @@ async def test_세션서비스_남의_세션_북마크_변경시_SessionNotFound
     repo.update.assert_not_awaited()
 
 
+async def test_세션삭제시_북마크와_피드백을_연쇄삭제한다() -> None:
+    session_repo = MagicMock(spec=ConversationSessionRepository)
+    session_repo.delete_by_id_for_user = AsyncMock(return_value=True)
+
+    bookmark_repo = MagicMock()
+    bookmark_repo.delete_by_session_for_user = AsyncMock(return_value=2)
+
+    feedback_repo = MagicMock()
+    feedback_repo.delete_by_session_for_user = AsyncMock(return_value=3)
+
+    service = SessionService(
+        repo=session_repo,
+        bookmark_repo=bookmark_repo,
+        feedback_repo=feedback_repo,
+    )
+
+    await service.delete_session("session-1", "user-1")
+
+    session_repo.delete_by_id_for_user.assert_awaited_once_with("session-1", "user-1")
+    bookmark_repo.delete_by_session_for_user.assert_awaited_once_with(
+        "session-1", "user-1"
+    )
+    feedback_repo.delete_by_session_for_user.assert_awaited_once_with(
+        "session-1", "user-1"
+    )
+
+
+async def test_세션삭제_실패시_연쇄삭제를_호출하지_않고_예외를_발생시킨다() -> None:
+    session_repo = MagicMock(spec=ConversationSessionRepository)
+    session_repo.delete_by_id_for_user = AsyncMock(return_value=False)
+
+    bookmark_repo = MagicMock()
+    bookmark_repo.delete_by_session_for_user = AsyncMock()
+
+    feedback_repo = MagicMock()
+    feedback_repo.delete_by_session_for_user = AsyncMock()
+
+    service = SessionService(
+        repo=session_repo,
+        bookmark_repo=bookmark_repo,
+        feedback_repo=feedback_repo,
+    )
+
+    with pytest.raises(SessionNotFoundError):
+        await service.delete_session("session-missing", "user-1")
+
+    session_repo.delete_by_id_for_user.assert_awaited_once_with(
+        "session-missing", "user-1"
+    )
+    bookmark_repo.delete_by_session_for_user.assert_not_awaited()
+    feedback_repo.delete_by_session_for_user.assert_not_awaited()
+
+
+async def test_세션삭제_선택적_리포지토리_없이도_정상동작한다() -> None:
+    session_repo = MagicMock(spec=ConversationSessionRepository)
+    session_repo.delete_by_id_for_user = AsyncMock(return_value=True)
+
+    service = SessionService(repo=session_repo)
+    await service.delete_session("session-1", "user-1")
+
+    session_repo.delete_by_id_for_user.assert_awaited_once_with("session-1", "user-1")
+
+
+
 
