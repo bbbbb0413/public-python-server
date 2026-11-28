@@ -982,6 +982,46 @@ async def test_get_session_detail_returns_is_bookmarked_field() -> None:
     assert res.json()["isBookmarked"] is False
 
 
+async def test_get_session_returns_turns_with_is_budget_exhausted() -> None:
+    now = datetime.now(UTC)
+    props = RestoreProps(
+        session_id="session-budget-exhausted-123",
+        user_id="user-1",
+        title="예산 소진 세션",
+        turns=[
+            TurnRecord(role="user", content="복잡한 에이전틱 질문", created_at=now),
+            TurnRecord(
+                role="assistant",
+                content="비평이 생략된 답변입니다.",
+                created_at=now,
+                confidence=0.0,
+                missing=[],
+                iterations=1,
+                is_budget_exhausted=True,
+            ),
+        ],
+        created_at=now,
+        updated_at=now,
+    )
+    session = ConversationSession.restore(props)
+
+    repo_mock = MagicMock(spec=ConversationSessionRepository)
+    repo_mock.find_by_id_for_user = AsyncMock(return_value=session)
+    app.dependency_overrides[get_conversation_session_repository] = lambda: repo_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/rag/sessions/session-budget-exhausted-123?userId=user-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sessionId"] == "session-budget-exhausted-123"
+    assert len(body["turns"]) == 2
+    assert body["turns"][0]["isBudgetExhausted"] is False
+    assert body["turns"][1]["isBudgetExhausted"] is True
+    assert body["turns"][1]["confidence"] == 0.0
+
+
 
 
 
