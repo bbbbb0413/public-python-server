@@ -38,6 +38,7 @@ class TurnValue:
     iterations: int | None = None
     is_cancelled: bool = False
     refined_queries: list[str] | None = None
+    is_budget_exhausted: bool = False
 
 
 class ConversationTurn:
@@ -58,6 +59,7 @@ class ConversationTurn:
         iterations: int | None = None,
         is_cancelled: bool = False,
         refined_queries: list[str] | None = None,
+        is_budget_exhausted: bool = False,
     ) -> "ConversationTurn":
         return cls(
             TurnValue(
@@ -70,6 +72,7 @@ class ConversationTurn:
                 iterations=iterations,
                 is_cancelled=is_cancelled,
                 refined_queries=refined_queries,
+                is_budget_exhausted=is_budget_exhausted,
             )
         )
 
@@ -113,6 +116,10 @@ class ConversationTurn:
     def refined_queries(self) -> list[str] | None:
         return self._value.refined_queries
 
+    @property
+    def is_budget_exhausted(self) -> bool:
+        return self._value.is_budget_exhausted
+
 
 @dataclass(frozen=True)
 class TurnRecord:
@@ -125,6 +132,7 @@ class TurnRecord:
     iterations: int | None = None
     is_cancelled: bool = False
     refined_queries: list[str] | None = None
+    is_budget_exhausted: bool = False
 
 
 @dataclass(frozen=True)
@@ -177,6 +185,7 @@ class ConversationSession:
                     iterations=t.iterations,
                     is_cancelled=t.is_cancelled,
                     refined_queries=t.refined_queries,
+                    is_budget_exhausted=t.is_budget_exhausted,
                 )
             )
             for t in props.turns
@@ -201,6 +210,7 @@ class ConversationSession:
         iterations: int | None = None,
         is_cancelled: bool = False,
         refined_queries: list[str] | None = None,
+        is_budget_exhausted: bool = False,
     ) -> "ConversationSession":
         new_turns = [
             *self._turns,
@@ -213,6 +223,7 @@ class ConversationSession:
                 iterations=iterations,
                 is_cancelled=is_cancelled,
                 refined_queries=refined_queries,
+                is_budget_exhausted=is_budget_exhausted,
             ),
         ]
         return ConversationSession(
@@ -400,6 +411,7 @@ class SessionTurnOut(BaseModel):
     iterations: int | None = None
     is_cancelled: bool = Field(default=False, alias="isCancelled")
     refined_queries: list[str] | None = Field(default=None, alias="refinedQueries")
+    is_budget_exhausted: bool = Field(default=False, alias="isBudgetExhausted")
 
     @classmethod
     def from_domain(cls, turn: ConversationTurn) -> "SessionTurnOut":
@@ -413,6 +425,7 @@ class SessionTurnOut(BaseModel):
             iterations=turn.iterations,
             isCancelled=turn.is_cancelled,
             refinedQueries=turn.refined_queries,
+            isBudgetExhausted=turn.is_budget_exhausted,
         )
 
 

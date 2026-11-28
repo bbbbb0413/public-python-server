@@ -182,13 +182,14 @@ class AgenticAskUseCase:
 
             elapsed_ms = (time.monotonic() - start_time) * 1000
             if budget_exhausted or command.budget.is_exhausted(iteration, tokens_used, elapsed_ms):
-                if iteration == 1:
-                    if chunks:
-                        last_confidence = max(c.score for c in chunks)
-                        last_missing = []
-                    else:
-                        last_confidence = 0.0
-                        last_missing = []
+                last_confidence = 0.0
+                last_missing = []
+                confidence_meta = {
+                    "confidence": 0.0,
+                    "missing": [],
+                    "isBudgetExhausted": True,
+                }
+                yield f"__CONFIDENCE:{json.dumps(confidence_meta)}"
                 await self._emit_progress(
                     callback,
                     iteration,
@@ -196,6 +197,7 @@ class AgenticAskUseCase:
                     last_confidence,
                     last_missing,
                     refined_queries=refined_queries,
+                    is_budget_exhausted=True,
                 )
                 return
 
@@ -245,6 +247,7 @@ class AgenticAskUseCase:
         missing: list[str],
         next_query: str | None = None,
         refined_queries: list[str] | None = None,
+        is_budget_exhausted: bool = False,
     ) -> None:
         if callback is None:
             return
@@ -254,6 +257,8 @@ class AgenticAskUseCase:
             "confidence": confidence,
             "missing": list(missing),
         }
+        if is_budget_exhausted:
+            payload["isBudgetExhausted"] = True
         if next_query is not None:
             payload["nextQuery"] = next_query
         if refined_queries:

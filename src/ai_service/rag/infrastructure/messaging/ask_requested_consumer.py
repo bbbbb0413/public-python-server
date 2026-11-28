@@ -117,18 +117,22 @@ class AskRequestedConsumer:
         last_missing: list[str] | None = None
         last_iteration: int | None = None
         last_refined_queries: list[str] | None = None
+        is_budget_exhausted: bool = False
 
         if complexity == "complex":
             last_refined_queries = []
 
             async def on_progress(data: dict[str, Any]) -> None:
-                nonlocal last_confidence, last_missing, last_iteration, last_refined_queries
+                nonlocal last_confidence, last_missing, last_iteration
+                nonlocal last_refined_queries, is_budget_exhausted
                 if "confidence" in data:
                     last_confidence = data["confidence"]
                 if "missing" in data:
                     last_missing = data["missing"]
                 if "iteration" in data:
                     last_iteration = data["iteration"]
+                if "isBudgetExhausted" in data:
+                    is_budget_exhausted = bool(data["isBudgetExhausted"])
                 if "refinedQueries" in data and isinstance(data["refinedQueries"], list):
                     last_refined_queries = list(data["refinedQueries"])
                 elif "nextQuery" in data and data["nextQuery"]:
@@ -197,6 +201,8 @@ class AskRequestedConsumer:
                     last_confidence = meta["confidence"]
                 if "missing" in meta:
                     last_missing = meta["missing"]
+                if "isBudgetExhausted" in meta:
+                    is_budget_exhausted = bool(meta["isBudgetExhausted"])
             else:
                 if not generating_announced:
                     await self._publisher.publish_progress(
@@ -218,6 +224,7 @@ class AskRequestedConsumer:
                 iterations=last_iteration,
                 is_cancelled=was_cancelled,
                 refined_queries=last_refined_queries,
+                is_budget_exhausted=is_budget_exhausted,
             )
             await composition.session_repo.update(updated)
 
@@ -227,10 +234,18 @@ class AskRequestedConsumer:
                 "confidence": last_confidence,
                 "missing": last_missing,
             }
+            if complexity == "complex" or is_budget_exhausted:
+                done_data["isBudgetExhausted"] = is_budget_exhausted
             if last_iteration is not None:
                 done_data["iterations"] = last_iteration
             if last_refined_queries is not None:
                 done_data["refinedQueries"] = last_refined_queries
+        elif is_budget_exhausted:
+            done_data = {
+                "confidence": 0.0,
+                "missing": [],
+                "isBudgetExhausted": True,
+            }
 
         await self._publisher.publish_done(message.job_id, done_data)
 

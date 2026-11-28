@@ -116,6 +116,7 @@ class ConversationSessionRepository:
                         iterations=t.get("iterations"),
                         is_cancelled=bool(t.get("isCancelled", False)),
                         refined_queries=t.get("refinedQueries"),
+                        is_budget_exhausted=bool(t.get("isBudgetExhausted", False)),
                     )
                     for t in record["turns"]
                 ],
@@ -146,6 +147,8 @@ class ConversationSessionRepository:
                 turn_dict["isCancelled"] = True
             if t.refined_queries is not None:
                 turn_dict["refinedQueries"] = t.refined_queries
+            if t.is_budget_exhausted:
+                turn_dict["isBudgetExhausted"] = True
             turns_data.append(turn_dict)
 
         return {

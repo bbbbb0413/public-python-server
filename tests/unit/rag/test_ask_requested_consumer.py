@@ -334,6 +334,7 @@ async def test_ask_requested_consumer_complex_publishes_done_with_metadata():
         "missing": ["추가 설명"],
         "iterations": 1,
         "refinedQueries": [],
+        "isBudgetExhausted": False,
     }
 
 
@@ -434,6 +435,7 @@ async def test_ask_requested_consumer_complex_multiple_iterations_publishes_late
         "missing": [],
         "iterations": 2,
         "refinedQueries": [],
+        "isBudgetExhausted": False,
     }
 
     session_repo_mock.update.assert_awaited_once()
@@ -1405,8 +1407,9 @@ async def test_ask_requested_consumer_complex_exhausted_budget_publishes_fallbac
     ]
     assert len(progress_calls) >= 2
     last_progress = json.loads(progress_calls[-1].args[1]["data"])
-    assert last_progress["confidence"] == 0.85
+    assert last_progress["confidence"] == 0.0
     assert last_progress["missing"] == []
+    assert last_progress["isBudgetExhausted"] is True
 
     # 2. done 이벤트 확인
     done_calls = [
@@ -1414,17 +1417,20 @@ async def test_ask_requested_consumer_complex_exhausted_budget_publishes_fallbac
     ]
     assert len(done_calls) == 1
     done_data = json.loads(done_calls[0].args[1]["data"])
-    assert done_data["confidence"] == 0.85
+    assert done_data["confidence"] == 0.0
     assert done_data["missing"] == []
     assert done_data["iterations"] == 1
+    assert done_data["isBudgetExhausted"] is True
+    assert done_data["isBudgetExhausted"] is True
 
     # 3. session.append_turn 저장 확인
     session_repo_mock.update.assert_awaited_once()
     updated_session: ConversationSession = session_repo_mock.update.await_args.args[0]
     last_turn = updated_session.turns[-1]
-    assert last_turn.confidence == 0.85
+    assert last_turn.confidence == 0.0
     assert last_turn.missing == []
     assert last_turn.iterations == 1
+    assert last_turn.is_budget_exhausted is True
 
 
 @pytest.mark.asyncio
@@ -1521,6 +1527,7 @@ async def test_ask_requested_consumer_complex_exhausted_budget_no_chunks_zero_co
     assert done_data["confidence"] == 0.0
     assert done_data["missing"] == []
     assert done_data["iterations"] == 1
+    assert done_data["isBudgetExhausted"] is True
 
 
 
