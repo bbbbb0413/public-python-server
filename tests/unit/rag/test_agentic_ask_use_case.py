@@ -261,7 +261,9 @@ async def test_agentic_ask_budget_exhausted_progress_events(
     )
 
     chunks = [c async for c in use_case.execute(command)]
-    assert "".join(chunks) == "테스트 답변입니다.\n\n테스트 답변입니다."
+    expected_text = "테스트 답변입니다.\n\n테스트 답변입니다."
+    assert "".join(c for c in chunks if not c.startswith("__")) == expected_text
+    assert any(c.startswith("__CONFIDENCE:") for c in chunks)
 
     assert len(events) == 7
     assert events[0] == {"iteration": 1, "phase": "searching", "confidence": 0.0, "missing": []}
@@ -290,9 +292,10 @@ async def test_agentic_ask_budget_exhausted_progress_events(
     assert events[6] == {
         "iteration": 2,
         "phase": "generating",
-        "confidence": 0.4,
-        "missing": ["남은 정보"],
+        "confidence": 0.0,
+        "missing": [],
         "refinedQueries": ["개선된 질문"],
+        "isBudgetExhausted": True,
     }
 
 
@@ -516,7 +519,7 @@ async def test_agentic_ask_streams_tokens_immediately_as_they_arrive(
         streamed_tokens.append(chunk)
 
     # 전체 한 번에 합쳐서 오는 것이 아니라, 각 토큰이 개별적으로 yield되어야 함
-    assert streamed_tokens == tokens
+    assert [c for c in streamed_tokens if not c.startswith("__")] == tokens
 
 
 @pytest.mark.asyncio
@@ -647,7 +650,8 @@ async def test_agentic_ask_empty_chunks_handles_gracefully(
     streamed_tokens = [c async for c in use_case.execute(command)]
     # __SOURCES: 없이 토큰만 정상 방출됨
     assert not any(t.startswith("__SOURCES:") for t in streamed_tokens)
-    assert "".join(streamed_tokens) == "관련 정보를 찾을 수 없습니다."
+    streamed_text = "".join(t for t in streamed_tokens if not t.startswith("__"))
+    assert streamed_text == "관련 정보를 찾을 수 없습니다."
 
 
 async def test_agentic_ask_multi_turn_sources_accumulate_and_deduplicate(
@@ -1234,18 +1238,29 @@ async def test_agentic_ask_fallback_confidence_when_budget_exhausted_with_chunks
         confidence_threshold=0.8,
     )
 
-    _ = [c async for c in use_case.execute(command)]
+    # SPEC-116: 1회차 실행 중 청크가 있더라도 예산 소진 시 청크 점수로 둔갑하지 않고 0.0 정규화
+    stream_chunks = [c async for c in use_case.execute(command)]
 
     # 비평(critique)은 예산 소진으로 호출되지 않아야 함
     mock_critique_generator.generate.assert_not_awaited()
+
+    # 스트림 청크에 __CONFIDENCE 메타데이터 포함 확인
+    confidence_chunks = [c for c in stream_chunks if c.startswith("__CONFIDENCE:")]
+    assert len(confidence_chunks) == 1
+    assert json.loads(confidence_chunks[0][len("__CONFIDENCE:") :]) == {
+        "confidence": 0.0,
+        "missing": [],
+        "isBudgetExhausted": True,
+    }
 
     # 마지막 progress 이벤트 확인
     assert len(events) >= 2
     final_event = events[-1]
     assert final_event["iteration"] == 1
     assert final_event["phase"] == "generating"
-    assert final_event["confidence"] == 0.85
+    assert final_event["confidence"] == 0.0
     assert final_event["missing"] == []
+    assert final_event["isBudgetExhausted"] is True
 
 
 @pytest.mark.asyncio
@@ -1295,6 +1310,7 @@ async def test_agentic_ask_fallback_confidence_when_budget_exhausted_with_no_chu
     assert final_event["phase"] == "generating"
     assert final_event["confidence"] == 0.0
     assert final_event["missing"] == []
+    assert final_event["isBudgetExhausted"] is True
 
 
 @pytest.mark.asyncio
@@ -1307,9 +1323,9 @@ async def test_agentic_ask_preserves_previous_confidence_when_exhausted_in_subse
     rag_validator: RagContentValidator,
     secret_pii_scanner: SecretPiiScanner,
 ):
-    # 수용 기준 4 검증:
+    # SPEC-116 검증:
     # 1회차 비평에서 신뢰도 0.65가 산출된 후 2회차 생성 중 예산 소진 시
-    # 이전 회차에서 검증된 신뢰도 0.65와 missing 정보 유지
+    # 비평이 수행되지 않았으므로 임의의 높은 점수(0.65)를 유지하지 않고 0.0으로 정규화
     mock_critique_generator.generate.return_value = Critique.of(
         answered=False,
         missing=["추가 보충 필요 항목"],
@@ -1345,8 +1361,9 @@ async def test_agentic_ask_preserves_previous_confidence_when_exhausted_in_subse
     final_event = events[-1]
     assert final_event["iteration"] == 2
     assert final_event["phase"] == "generating"
-    assert final_event["confidence"] == 0.65
-    assert final_event["missing"] == ["추가 보충 필요 항목"]
+    assert final_event["confidence"] == 0.0
+    assert final_event["missing"] == []
+    assert final_event["isBudgetExhausted"] is True
 
 
 @pytest.mark.asyncio
@@ -1398,7 +1415,7 @@ async def test_agentic_ask_streams_exact_acceptance_criterion_1(
     )
 
     streamed_tokens = [c async for c in use_case.execute(command)]
-    emitted_text = "".join(streamed_tokens)
+    emitted_text = "".join(t for t in streamed_tokens if not t.startswith("__"))
 
     assert "Step 1: 분석" not in emitted_text
     assert "The final answer is 정답" not in emitted_text
@@ -1468,10 +1485,10 @@ async def test_agentic_ask_preserves_zero_confidence_from_previous_critique_when
     final_event = events[-1]
     assert final_event["iteration"] == 2
     assert final_event["phase"] == "generating"
-    # 1회차 비평의 0.0과 missing이 그대로 유지되어야 함
-    # (청크 최고점인 0.92나 비평 생략 안내로 덮어써지지 않아야 함)
+    # SPEC-116: 예산 소진 시 안전한 미검증 기본 신뢰도(0.0)와 빈 missing 및 플래그 설정
     assert final_event["confidence"] == 0.0
-    assert final_event["missing"] == ["질문과 무관한 오답"]
+    assert final_event["missing"] == []
+    assert final_event["isBudgetExhausted"] is True
 
 
 
